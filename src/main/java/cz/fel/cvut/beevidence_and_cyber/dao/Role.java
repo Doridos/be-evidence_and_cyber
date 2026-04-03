@@ -31,7 +31,4 @@ public class Role extends AbstractUuidEntity {
 
     @OneToMany(mappedBy = "role")
     private Set<UserRoleAssignment> userAssignments = new HashSet<>();
-
-    @OneToMany(mappedBy = "role")
-    private Set<RolePermissionAssignment> permissionAssignments = new HashSet<>();
 }

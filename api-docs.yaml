@@ -102,42 +102,6 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/RoleDto'
-  /permissions:
-    get:
-      tags: [Directory]
-      summary: Get all permissions
-      security:
-        - bearerAuth: [ ]
-      responses:
-        '200':
-          description: Permission list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/PermissionDto'
-  /roles/{id}/permissions:
-    put:
-      tags: [Directory]
-      summary: Replace role permission assignments
-      security:
-        - bearerAuth: [ ]
-      parameters:
-        - $ref: '#/components/parameters/UuidPath'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RolePermissionAssignmentRequest'
-      responses:
-        '200':
-          description: Updated role
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RoleDto'
   /devices:
     get:
       tags: [Devices]
@@ -727,26 +691,6 @@ components:
           items:
             type: string
             format: uuid
-    RolePermissionAssignmentRequest:
-      type: object
-      properties:
-        permissionIds:
-          type: array
-          items:
-            type: string
-            format: uuid
-    PermissionDto:
-      type: object
-      properties:
-        id:
-          type: string
-          format: uuid
-        code:
-          type: string
-        name:
-          type: string
-        description:
-          type: string
     RoleDto:
       type: object
       properties:
@@ -761,10 +705,6 @@ components:
           type: string
         system:
           type: boolean
-        permissions:
-          type: array
-          items:
-            $ref: '#/components/schemas/PermissionDto'
     UserDto:
       type: object
       properties:

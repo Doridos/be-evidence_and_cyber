@@ -24,12 +24,8 @@ public class ApiMapper {
         );
     }
 
-    public RoleDto toDto(Role role, List<PermissionDto> permissions) {
-        return new RoleDto(role.getId(), role.getCode(), role.getName(), role.getDescription(), role.isSystem(), permissions);
-    }
-
-    public PermissionDto toDto(Permission permission) {
-        return new PermissionDto(permission.getId(), permission.getCode(), permission.getName(), permission.getDescription());
+    public RoleDto toDto(Role role) {
+        return new RoleDto(role.getId(), role.getCode(), role.getName(), role.getDescription(), role.isSystem());
     }
 
     public DeviceDetailDto toDto(EndpointDevice device,
