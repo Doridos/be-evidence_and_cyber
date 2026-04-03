@@ -135,6 +135,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DeviceDetailDto'
+  /devices/subnet-scan:
+    post:
+      tags: [Devices]
+      summary: Scan IPv4 subnet and return currently active endpoint devices
+      security:
+        - bearerAuth: [ ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceSubnetScanRequest'
+      responses:
+        '200':
+          description: Scan result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceSubnetScanResultDto'
   /devices/{id}:
     get:
       tags: [Devices]
@@ -758,6 +777,64 @@ components:
           type: string
         agentInstalled:
           type: boolean
+    DeviceSubnetScanRequest:
+      type: object
+      required: [subnetCidr]
+      properties:
+        subnetCidr:
+          type: string
+          example: 192.168.68.0/24
+        timeoutMs:
+          type: integer
+          example: 350
+        maxHosts:
+          type: integer
+          example: 256
+    DiscoveredDeviceDto:
+      type: object
+      properties:
+        ipAddress:
+          type: string
+        hostname:
+          type: string
+        fqdn:
+          type: string
+        responseTimeMs:
+          type: integer
+          format: int64
+        alreadyInInventory:
+          type: boolean
+        existingDeviceId:
+          type: string
+          format: uuid
+        existingDeviceHostname:
+          type: string
+        agentInstalled:
+          type: boolean
+        suggestedHostname:
+          type: string
+    DeviceSubnetScanResultDto:
+      type: object
+      properties:
+        subnetCidr:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
+          format: int64
+        scannedHosts:
+          type: integer
+        activeHosts:
+          type: integer
+        devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiscoveredDeviceDto'
     NetworkInterfaceDto:
       type: object
       properties:

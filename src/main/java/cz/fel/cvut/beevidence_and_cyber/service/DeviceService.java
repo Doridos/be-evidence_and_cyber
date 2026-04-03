@@ -28,6 +28,7 @@ public class DeviceService {
     private final TelemetrySampleRepository telemetrySampleRepository;
     private final DeviceLogEntryRepository deviceLogEntryRepository;
     private final FileSystemEventRepository fileSystemEventRepository;
+    private final SubnetScanService subnetScanService;
     private final ApiMapper apiMapper;
     private final AuditService auditService;
 
@@ -120,6 +121,10 @@ public class DeviceService {
 
     public List<AgentHeartbeatDto> getHeartbeats(UUID deviceId) {
         return agentHeartbeatRepository.findByDeviceOrderByLastSeenAtDesc(findDevice(deviceId)).stream().map(apiMapper::toDto).toList();
+    }
+
+    public DeviceSubnetScanResultDto scanSubnet(DeviceSubnetScanRequest request, User actor) {
+        return subnetScanService.scan(request, actor);
     }
 
     public DeviceDetailDto toDetailDto(EndpointDevice device) {

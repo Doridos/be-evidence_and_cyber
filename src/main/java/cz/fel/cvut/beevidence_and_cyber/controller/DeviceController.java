@@ -1,6 +1,7 @@
 package cz.fel.cvut.beevidence_and_cyber.controller;
 
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceCreateRequest;
+import cz.fel.cvut.beevidence_and_cyber.dto.DeviceSubnetScanRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceUpdateRequest;
 import cz.fel.cvut.beevidence_and_cyber.service.CurrentUserService;
 import cz.fel.cvut.beevidence_and_cyber.service.DeviceService;
@@ -36,6 +37,12 @@ public class DeviceController {
     @PreAuthorize("hasRole('ADMIN')")
     public Object createDevice(@Valid @RequestBody DeviceCreateRequest request) {
         return deviceService.createDevice(request, currentUserService.requireCurrentUser());
+    }
+
+    @PostMapping("/subnet-scan")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Object scanSubnet(@Valid @RequestBody DeviceSubnetScanRequest request) {
+        return deviceService.scanSubnet(request, currentUserService.requireCurrentUser());
     }
 
     @PutMapping("/{id}")
