@@ -1,0 +1,1461 @@
+openapi: 3.0.3
+info:
+  title: Evidence And Cyber Backend API
+  version: 0.1.0
+  description: API for endpoint inventory, agent ingestion, detection management, remote help and command orchestration.
+servers:
+  - url: /api/v1
+paths:
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Authenticate user against LDAP/AD and issue JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+  /auth/me:
+    get:
+      tags: [Authentication]
+      summary: Return current authenticated user
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDto'
+  /users:
+    get:
+      tags: [Directory]
+      summary: Get all users
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: User list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserDto'
+  /users/{id}:
+    get:
+      tags: [Directory]
+      summary: Get user by id
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      responses:
+        '200':
+          description: User detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDto'
+  /users/{id}/roles:
+    put:
+      tags: [Directory]
+      summary: Replace user role assignments
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRoleAssignmentRequest'
+      responses:
+        '200':
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDto'
+  /roles:
+    get:
+      tags: [Directory]
+      summary: Get all roles
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Role list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RoleDto'
+  /permissions:
+    get:
+      tags: [Directory]
+      summary: Get all permissions
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Permission list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PermissionDto'
+  /roles/{id}/permissions:
+    put:
+      tags: [Directory]
+      summary: Replace role permission assignments
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RolePermissionAssignmentRequest'
+      responses:
+        '200':
+          description: Updated role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleDto'
+  /devices:
+    get:
+      tags: [Devices]
+      summary: Get all devices
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Device list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DeviceDetailDto'
+    post:
+      tags: [Devices]
+      summary: Create a device
+      security:
+        - bearerAuth: [ ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceCreateRequest'
+      responses:
+        '200':
+          description: Created device
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceDetailDto'
+  /devices/{id}:
+    get:
+      tags: [Devices]
+      summary: Get device detail
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      responses:
+        '200':
+          description: Device detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceDetailDto'
+    put:
+      tags: [Devices]
+      summary: Update device metadata
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceUpdateRequest'
+      responses:
+        '200':
+          description: Updated device
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceDetailDto'
+  /devices/{id}/archive:
+    post:
+      tags: [Devices]
+      summary: Archive device
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      responses:
+        '200':
+          description: Archived device
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceDetailDto'
+  /devices/{id}/snapshots:
+    get:
+      tags: [Devices]
+      summary: Get device snapshots
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      responses:
+        '200':
+          description: Snapshot list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DeviceSnapshotDto'
+  /devices/{id}/heartbeats:
+    get:
+      tags: [Devices]
+      summary: Get device heartbeats
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      responses:
+        '200':
+          description: Heartbeat list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentHeartbeatDto'
+  /devices/{id}/telemetry:
+    get:
+      tags: [Devices]
+      summary: Get device telemetry samples
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      responses:
+        '200':
+          description: Telemetry list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TelemetrySampleDto'
+  /devices/{id}/logs:
+    get:
+      tags: [Devices]
+      summary: Get device log entries
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      responses:
+        '200':
+          description: Log list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DeviceLogEntryDto'
+  /devices/{id}/file-system-events:
+    get:
+      tags: [Devices]
+      summary: Get file system events
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      responses:
+        '200':
+          description: File system event list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileSystemEventDto'
+  /detection-rules:
+    get:
+      tags: [Detection]
+      summary: Get all detection rules
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Detection rule list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DetectionRuleDto'
+    post:
+      tags: [Detection]
+      summary: Create detection rule
+      security:
+        - bearerAuth: [ ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DetectionRuleRequest'
+      responses:
+        '200':
+          description: Created rule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetectionRuleDto'
+  /detection-rules/{id}:
+    put:
+      tags: [Detection]
+      summary: Update detection rule
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DetectionRuleRequest'
+      responses:
+        '200':
+          description: Updated rule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetectionRuleDto'
+  /detection-findings:
+    get:
+      tags: [Detection]
+      summary: Get all detection findings
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Finding list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DetectionFindingDto'
+  /detection-findings/{id}:
+    get:
+      tags: [Detection]
+      summary: Get detection finding detail
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      responses:
+        '200':
+          description: Finding detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetectionFindingDto'
+  /detection-findings/{id}/status:
+    put:
+      tags: [Detection]
+      summary: Update finding status
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DetectionFindingStatusRequest'
+      responses:
+        '200':
+          description: Updated finding
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetectionFindingDto'
+  /ai-analysis-runs:
+    get:
+      tags: [Detection]
+      summary: Get all AI analysis runs
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: AI analysis run list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AIAnalysisRunDto'
+    post:
+      tags: [Detection]
+      summary: Create AI analysis run
+      security:
+        - bearerAuth: [ ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIAnalysisRunRequest'
+      responses:
+        '200':
+          description: Created AI analysis run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIAnalysisRunDto'
+  /remote-help-requests:
+    get:
+      tags: [RemoteSupport]
+      summary: Get all remote help requests
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Remote help request list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RemoteHelpRequestDto'
+  /remote-help-requests/{id}:
+    get:
+      tags: [RemoteSupport]
+      summary: Get remote help request detail
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      responses:
+        '200':
+          description: Help request detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteHelpRequestDto'
+  /remote-help-requests/{id}/accept:
+    post:
+      tags: [RemoteSupport]
+      summary: Accept remote help request
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      responses:
+        '200':
+          description: Accepted help request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteHelpRequestDto'
+  /remote-sessions:
+    get:
+      tags: [RemoteSupport]
+      summary: Get remote sessions
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Remote session list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RemoteSessionDto'
+    post:
+      tags: [RemoteSupport]
+      summary: Create remote session
+      security:
+        - bearerAuth: [ ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemoteSessionCreateRequest'
+      responses:
+        '200':
+          description: Created remote session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteSessionDto'
+  /remote-sessions/{id}/approvals:
+    post:
+      tags: [RemoteSupport]
+      summary: Create control approval record
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControlApprovalRequest'
+      responses:
+        '200':
+          description: Created control approval
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControlApprovalDto'
+  /command-requests:
+    get:
+      tags: [Commands]
+      summary: Get all command requests
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Command request list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CommandRequestDto'
+    post:
+      tags: [Commands]
+      summary: Create command request
+      security:
+        - bearerAuth: [ ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandRequestCreateRequest'
+      responses:
+        '200':
+          description: Created command request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandRequestDto'
+  /command-requests/{id}:
+    get:
+      tags: [Commands]
+      summary: Get command request detail
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      responses:
+        '200':
+          description: Command request detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandRequestDto'
+  /command-executions:
+    post:
+      tags: [Commands]
+      summary: Create command execution result from web
+      security:
+        - bearerAuth: [ ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandExecutionCreateRequest'
+      responses:
+        '200':
+          description: Created command execution
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandExecutionDto'
+  /agents/heartbeat:
+    post:
+      tags: [Agent]
+      summary: Ingest heartbeat, snapshot and telemetry from endpoint agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentHeartbeatRequest'
+      responses:
+        '200':
+          description: Updated device detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceDetailDto'
+  /agents/help-requests:
+    post:
+      tags: [Agent]
+      summary: Ingest remote help request from endpoint agent UI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentHelpRequestInput'
+      responses:
+        '200':
+          description: Stored remote help request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteHelpRequestDto'
+  /agents/logs:
+    post:
+      tags: [Agent]
+      summary: Ingest log entries and file system events
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentLogIngestionRequest'
+      responses:
+        '202':
+          description: Accepted
+  /agents/command-executions:
+    post:
+      tags: [Agent]
+      summary: Ingest command execution result from agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentCommandExecutionRequest'
+      responses:
+        '200':
+          description: Stored command execution result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandExecutionDto'
+  /audit-logs:
+    get:
+      tags: [Audit]
+      summary: Get audit log entries
+      security:
+        - bearerAuth: [ ]
+      responses:
+        '200':
+          description: Audit log list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditLogDto'
+components:
+  parameters:
+    UuidPath:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: '#/components/schemas/UserDto'
+    UserRoleAssignmentRequest:
+      type: object
+      properties:
+        roleIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+    RolePermissionAssignmentRequest:
+      type: object
+      properties:
+        permissionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+    PermissionDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+    RoleDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        system:
+          type: boolean
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermissionDto'
+    UserDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        adUsername:
+          type: string
+        displayName:
+          type: string
+        email:
+          type: string
+        department:
+          type: string
+        enabled:
+          type: boolean
+        lastLoginAt:
+          type: string
+          format: date-time
+        source:
+          type: string
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleDto'
+    DeviceCreateRequest:
+      type: object
+      properties:
+        assetTag:
+          type: string
+        hostname:
+          type: string
+        fqdn:
+          type: string
+        primaryIp:
+          type: string
+        site:
+          type: string
+        agentInstalled:
+          type: boolean
+    DeviceUpdateRequest:
+      type: object
+      properties:
+        assetTag:
+          type: string
+        fqdn:
+          type: string
+        primaryIp:
+          type: string
+        site:
+          type: string
+        agentInstalled:
+          type: boolean
+    NetworkInterfaceDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        displayName:
+          type: string
+        macAddress:
+          type: string
+        ipv4:
+          type: string
+        ipv6:
+          type: string
+        primary:
+          type: boolean
+        up:
+          type: boolean
+    LoggedInSessionDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        domain:
+          type: string
+        sessionType:
+          type: string
+        state:
+          type: string
+        loginTime:
+          type: string
+          format: date-time
+    DeviceSnapshotDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        versionNo:
+          type: integer
+        collectedAt:
+          type: string
+          format: date-time
+        validFrom:
+          type: string
+          format: date-time
+        validTo:
+          type: string
+          format: date-time
+        hostname:
+          type: string
+        osName:
+          type: string
+        osVersion:
+          type: string
+        osArchitecture:
+          type: string
+        domainName:
+          type: string
+        currentLoggedUser:
+          type: string
+        lastBootAt:
+          type: string
+          format: date-time
+        javaAgentVersion:
+          type: string
+        networkInterfaces:
+          type: array
+          items:
+            $ref: '#/components/schemas/NetworkInterfaceDto'
+        loggedInSessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/LoggedInSessionDto'
+    AgentHeartbeatDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        agentVersion:
+          type: string
+        serviceStatus:
+          type: string
+        lastSeenAt:
+          type: string
+          format: date-time
+        lastCollectAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
+    TelemetrySampleDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        collectedAt:
+          type: string
+          format: date-time
+        cpuUsagePct:
+          type: number
+        memoryUsagePct:
+          type: number
+        diskUsagePct:
+          type: number
+        processCount:
+          type: integer
+          format: int64
+        serviceCount:
+          type: integer
+          format: int64
+    DeviceLogEntryDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        occurredAt:
+          type: string
+          format: date-time
+        logSource:
+          type: string
+        level:
+          type: string
+        eventCode:
+          type: string
+        message:
+          type: string
+        rawPayload:
+          type: string
+    FileSystemEventDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        occurredAt:
+          type: string
+          format: date-time
+        eventType:
+          type: string
+        path:
+          type: string
+        actorUsername:
+          type: string
+        sourceLog:
+          type: string
+        detailsJson:
+          type: object
+          additionalProperties: true
+    DeviceDetailDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        assetTag:
+          type: string
+        hostname:
+          type: string
+        fqdn:
+          type: string
+        primaryIp:
+          type: string
+        site:
+          type: string
+        status:
+          type: string
+        agentInstalled:
+          type: boolean
+        discoveredAt:
+          type: string
+          format: date-time
+        archivedAt:
+          type: string
+          format: date-time
+        snapshots:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeviceSnapshotDto'
+        heartbeats:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentHeartbeatDto'
+        telemetrySamples:
+          type: array
+          items:
+            $ref: '#/components/schemas/TelemetrySampleDto'
+        logEntries:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeviceLogEntryDto'
+        fileSystemEvents:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileSystemEventDto'
+    DetectionRuleRequest:
+      type: object
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        severity:
+          type: string
+        sourceType:
+          type: string
+        conditionJson:
+          type: object
+          additionalProperties: true
+        enabled:
+          type: boolean
+    DetectionRuleDto:
+      allOf:
+        - $ref: '#/components/schemas/DetectionRuleRequest'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+    DetectionFindingStatusRequest:
+      type: object
+      properties:
+        status:
+          type: string
+    DetectionFindingDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        deviceId:
+          type: string
+          format: uuid
+        ruleId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        severity:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        firstSeenAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: string
+          format: date-time
+        createdByAi:
+          type: boolean
+    AIAnalysisRunRequest:
+      type: object
+      properties:
+        deviceId:
+          type: string
+          format: uuid
+        modelName:
+          type: string
+        promptVersion:
+          type: string
+        resultSummary:
+          type: string
+    AIAnalysisRunDto:
+      allOf:
+        - $ref: '#/components/schemas/AIAnalysisRunRequest'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            triggeredByUserId:
+              type: string
+              format: uuid
+            startedAt:
+              type: string
+              format: date-time
+            completedAt:
+              type: string
+              format: date-time
+            riskScore:
+              type: number
+    RemoteHelpRequestDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        deviceId:
+          type: string
+          format: uuid
+        requestedByUsername:
+          type: string
+        requestedByDisplayName:
+          type: string
+        message:
+          type: string
+        status:
+          type: string
+        requestedAt:
+          type: string
+          format: date-time
+        acceptedByUserId:
+          type: string
+          format: uuid
+        acceptedAt:
+          type: string
+          format: date-time
+    RemoteSessionCreateRequest:
+      type: object
+      properties:
+        helpRequestId:
+          type: string
+          format: uuid
+        sessionType:
+          type: string
+        provider:
+          type: string
+    RemoteSessionDto:
+      allOf:
+        - $ref: '#/components/schemas/RemoteSessionCreateRequest'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            adminUserId:
+              type: string
+              format: uuid
+            status:
+              type: string
+            startedAt:
+              type: string
+              format: date-time
+            endedAt:
+              type: string
+              format: date-time
+    ControlApprovalRequest:
+      type: object
+      properties:
+        decision:
+          type: string
+        decidedByUsername:
+          type: string
+        note:
+          type: string
+    ControlApprovalDto:
+      allOf:
+        - $ref: '#/components/schemas/ControlApprovalRequest'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            remoteSessionId:
+              type: string
+              format: uuid
+            requestedAt:
+              type: string
+              format: date-time
+            decidedAt:
+              type: string
+              format: date-time
+    CommandRequestCreateRequest:
+      type: object
+      properties:
+        deviceId:
+          type: string
+          format: uuid
+        commandType:
+          type: string
+        payloadJson:
+          type: object
+          additionalProperties: true
+    CommandRequestDto:
+      allOf:
+        - $ref: '#/components/schemas/CommandRequestCreateRequest'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            requestedByUserId:
+              type: string
+              format: uuid
+            status:
+              type: string
+            createdAt:
+              type: string
+              format: date-time
+    CommandExecutionCreateRequest:
+      type: object
+      properties:
+        commandRequestId:
+          type: string
+          format: uuid
+        agentHeartbeatId:
+          type: string
+          format: uuid
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        exitCode:
+          type: integer
+        resultSummary:
+          type: string
+        errorMessage:
+          type: string
+    CommandExecutionDto:
+      allOf:
+        - $ref: '#/components/schemas/CommandExecutionCreateRequest'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+    AgentNetworkAdapterPayload:
+      type: object
+      properties:
+        name:
+          type: string
+        displayName:
+          type: string
+        macAddress:
+          type: string
+        ipv4Addresses:
+          type: array
+          items:
+            type: string
+        ipv6Addresses:
+          type: array
+          items:
+            type: string
+        primary:
+          type: boolean
+        up:
+          type: boolean
+    AgentLoggedInSessionPayload:
+      type: object
+      properties:
+        username:
+          type: string
+        domain:
+          type: string
+        sessionType:
+          type: string
+        state:
+          type: string
+        loginTime:
+          type: string
+          format: date-time
+    AgentDevicePayload:
+      type: object
+      properties:
+        hostname:
+          type: string
+        fqdn:
+          type: string
+        primaryIp:
+          type: string
+        osName:
+          type: string
+        osVersion:
+          type: string
+        osArchitecture:
+          type: string
+        domainName:
+          type: string
+        currentLoggedUser:
+          type: string
+        lastBootAt:
+          type: string
+          format: date-time
+        agentVersion:
+          type: string
+        collectedAt:
+          type: string
+          format: date-time
+        networkAdapters:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentNetworkAdapterPayload'
+        loggedInSessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentLoggedInSessionPayload'
+    AgentTelemetryPayload:
+      type: object
+      properties:
+        collectedAt:
+          type: string
+          format: date-time
+        cpuUsagePct:
+          type: number
+        memoryUsagePct:
+          type: number
+        diskUsagePct:
+          type: number
+        processCount:
+          type: integer
+          format: int64
+        serviceCount:
+          type: integer
+          format: int64
+    AgentHeartbeatRequest:
+      type: object
+      properties:
+        device:
+          $ref: '#/components/schemas/AgentDevicePayload'
+        telemetry:
+          $ref: '#/components/schemas/AgentTelemetryPayload'
+    AgentHelpRequestInput:
+      type: object
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        requestedByUsername:
+          type: string
+        requestedByDisplayName:
+          type: string
+        requestedByDomain:
+          type: string
+        deviceHostname:
+          type: string
+        deviceFqdn:
+          type: string
+        primaryIp:
+          type: string
+        message:
+          type: string
+        requestedAt:
+          type: string
+          format: date-time
+    AgentLogEntryPayload:
+      type: object
+      properties:
+        occurredAt:
+          type: string
+          format: date-time
+        logSource:
+          type: string
+        level:
+          type: string
+        eventCode:
+          type: string
+        message:
+          type: string
+        rawPayload:
+          type: string
+    AgentFileSystemEventPayload:
+      type: object
+      properties:
+        occurredAt:
+          type: string
+          format: date-time
+        eventType:
+          type: string
+        path:
+          type: string
+        actorUsername:
+          type: string
+        sourceLog:
+          type: string
+        detailsJson:
+          type: object
+          additionalProperties: true
+    AgentLogIngestionRequest:
+      type: object
+      properties:
+        deviceHostname:
+          type: string
+        logEntries:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentLogEntryPayload'
+        fileSystemEvents:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentFileSystemEventPayload'
+    AgentCommandExecutionRequest:
+      type: object
+      properties:
+        commandRequestId:
+          type: string
+          format: uuid
+        agentHeartbeatId:
+          type: string
+          format: uuid
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        exitCode:
+          type: integer
+        resultSummary:
+          type: string
+        errorMessage:
+          type: string
+    AuditLogDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        actorUserId:
+          type: string
+          format: uuid
+        actorSource:
+          type: string
+        actionType:
+          type: string
+        targetType:
+          type: string
+        targetId:
+          type: string
+          format: uuid
+        result:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        detailsJson:
+          type: object
+          additionalProperties: true
