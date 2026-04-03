@@ -54,11 +54,17 @@ public class ApiMapper {
     }
 
     public DeviceSnapshotDto toDto(DeviceSnapshot snapshot) {
-        List<NetworkInterfaceDto> interfaces = snapshot.getNetworkInterfaces().stream()
+        return toDto(snapshot, snapshot.getNetworkInterfaces().stream().toList(), snapshot.getLoggedInSessions().stream().toList());
+    }
+
+    public DeviceSnapshotDto toDto(DeviceSnapshot snapshot,
+                                   List<NetworkInterface> networkInterfaces,
+                                   List<LoggedInSession> loggedInSessions) {
+        List<NetworkInterfaceDto> interfaces = networkInterfaces.stream()
                 .sorted(Comparator.comparing(NetworkInterface::getName, Comparator.nullsLast(String::compareToIgnoreCase)))
                 .map(this::toDto)
                 .toList();
-        List<LoggedInSessionDto> sessions = snapshot.getLoggedInSessions().stream()
+        List<LoggedInSessionDto> sessions = loggedInSessions.stream()
                 .map(this::toDto)
                 .toList();
         return new DeviceSnapshotDto(

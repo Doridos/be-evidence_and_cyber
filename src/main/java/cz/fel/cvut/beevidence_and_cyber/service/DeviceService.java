@@ -22,6 +22,8 @@ public class DeviceService {
 
     private final EndpointDeviceRepository endpointDeviceRepository;
     private final DeviceSnapshotRepository deviceSnapshotRepository;
+    private final NetworkInterfaceRepository networkInterfaceRepository;
+    private final LoggedInSessionRepository loggedInSessionRepository;
     private final AgentHeartbeatRepository agentHeartbeatRepository;
     private final TelemetrySampleRepository telemetrySampleRepository;
     private final DeviceLogEntryRepository deviceLogEntryRepository;
@@ -101,7 +103,7 @@ public class DeviceService {
     }
 
     public List<DeviceSnapshotDto> getSnapshots(UUID deviceId) {
-        return deviceSnapshotRepository.findByDeviceOrderByCollectedAtDesc(findDevice(deviceId)).stream().map(apiMapper::toDto).toList();
+        return mapSnapshots(findDevice(deviceId));
     }
 
     public List<TelemetrySampleDto> getTelemetry(UUID deviceId) {
@@ -123,11 +125,21 @@ public class DeviceService {
     public DeviceDetailDto toDetailDto(EndpointDevice device) {
         return apiMapper.toDto(
                 device,
-                deviceSnapshotRepository.findByDeviceOrderByCollectedAtDesc(device).stream().map(apiMapper::toDto).toList(),
+                mapSnapshots(device),
                 agentHeartbeatRepository.findByDeviceOrderByLastSeenAtDesc(device).stream().map(apiMapper::toDto).toList(),
                 telemetrySampleRepository.findByDeviceOrderByCollectedAtDesc(device).stream().map(apiMapper::toDto).toList(),
                 deviceLogEntryRepository.findByDeviceOrderByOccurredAtDesc(device).stream().map(apiMapper::toDto).toList(),
                 fileSystemEventRepository.findByDeviceOrderByOccurredAtDesc(device).stream().map(apiMapper::toDto).toList()
         );
+    }
+
+    private List<DeviceSnapshotDto> mapSnapshots(EndpointDevice device) {
+        return deviceSnapshotRepository.findByDeviceOrderByCollectedAtDesc(device).stream()
+                .map(snapshot -> apiMapper.toDto(
+                        snapshot,
+                        networkInterfaceRepository.findBySnapshot(snapshot),
+                        loggedInSessionRepository.findBySnapshot(snapshot)
+                ))
+                .toList();
     }
 }

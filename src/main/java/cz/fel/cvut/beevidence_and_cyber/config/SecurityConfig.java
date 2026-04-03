@@ -1,6 +1,7 @@
 package cz.fel.cvut.beevidence_and_cyber.config;
 
 import cz.fel.cvut.beevidence_and_cyber.security.JwtAuthenticationFilter;
+import cz.fel.cvut.beevidence_and_cyber.security.AgentAccessFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -25,10 +26,11 @@ import java.util.List;
 
 @Configuration
 @EnableMethodSecurity
-@EnableConfigurationProperties({LdapProperties.class, CorsProperties.class})
+@EnableConfigurationProperties({LdapProperties.class, CorsProperties.class, AgentAccessProperties.class})
 @RequiredArgsConstructor
 public class SecurityConfig {
 
+    private final AgentAccessFilter agentAccessFilter;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final LdapProperties ldapProperties;
     private final CorsProperties corsProperties;
@@ -41,10 +43,11 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/auth/**", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/agents/**").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/agents/**", "/api/v1/agents/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .httpBasic(Customizer.withDefaults())
+                .addFilterBefore(agentAccessFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

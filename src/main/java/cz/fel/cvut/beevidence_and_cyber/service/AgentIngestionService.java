@@ -50,7 +50,7 @@ public class AgentIngestionService {
 
         return apiMapper.toDto(
                 savedDevice,
-                deviceSnapshotRepository.findByDeviceOrderByCollectedAtDesc(savedDevice).stream().map(apiMapper::toDto).toList(),
+                mapSnapshots(savedDevice),
                 agentHeartbeatRepository.findByDeviceOrderByLastSeenAtDesc(savedDevice).stream().map(apiMapper::toDto).toList(),
                 telemetrySampleRepository.findByDeviceOrderByCollectedAtDesc(savedDevice).stream().map(apiMapper::toDto).toList(),
                 deviceLogEntryRepository.findByDeviceOrderByOccurredAtDesc(savedDevice).stream().map(apiMapper::toDto).toList(),
@@ -257,5 +257,15 @@ public class AgentIngestionService {
 
     private BigDecimal defaultDecimal(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private List<DeviceSnapshotDto> mapSnapshots(EndpointDevice device) {
+        return deviceSnapshotRepository.findByDeviceOrderByCollectedAtDesc(device).stream()
+                .map(snapshot -> apiMapper.toDto(
+                        snapshot,
+                        networkInterfaceRepository.findBySnapshot(snapshot),
+                        loggedInSessionRepository.findBySnapshot(snapshot)
+                ))
+                .toList();
     }
 }

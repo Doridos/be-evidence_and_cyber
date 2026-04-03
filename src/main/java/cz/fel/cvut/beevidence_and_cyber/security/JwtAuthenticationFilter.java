@@ -22,6 +22,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final DirectoryService directoryService;
 
     @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        String requestUri = request.getRequestURI();
+        String contextPath = request.getContextPath();
+        if (requestUri == null || requestUri.isBlank()) {
+            return false;
+        }
+        String requestPath = requestUri;
+        if (contextPath != null && !contextPath.isBlank() && requestUri.startsWith(contextPath)) {
+            requestPath = requestUri.substring(contextPath.length());
+        }
+        return requestPath.startsWith("/agents/");
+    }
+
+    @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
         String authorizationHeader = request.getHeader("Authorization");
