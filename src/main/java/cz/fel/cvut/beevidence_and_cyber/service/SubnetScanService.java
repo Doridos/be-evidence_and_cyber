@@ -1,5 +1,6 @@
 package cz.fel.cvut.beevidence_and_cyber.service;
 
+import cz.fel.cvut.beevidence_and_cyber.config.LdapProperties;
 import cz.fel.cvut.beevidence_and_cyber.dao.User;
 import cz.fel.cvut.beevidence_and_cyber.dao.EndpointDevice;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceSubnetScanRequest;
@@ -13,14 +14,22 @@ import lombok.extern.slf4j.Slf4j;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import javax.naming.Context;
+import javax.naming.NamingEnumeration;
+import javax.naming.directory.Attribute;
+import javax.naming.directory.Attributes;
+import javax.naming.directory.DirContext;
+import javax.naming.directory.InitialDirContext;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.net.Socket;
 import java.net.UnknownHostException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Hashtable;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
@@ -40,6 +49,7 @@ public class SubnetScanService {
 
     private final EndpointDeviceRepository endpointDeviceRepository;
     private final AuditService auditService;
+    private final LdapProperties ldapProperties;
 
     public DeviceSubnetScanResultDto scan(DeviceSubnetScanRequest request, User actorUser) {
         ParsedSubnet parsedSubnet = parseSubnet(request.subnetCidr());
@@ -133,9 +143,19 @@ public class SubnetScanService {
             }
 
             long responseTimeMs = Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+            String directHostname = safeHostname(address);
             String canonicalName = safeCanonicalHostname(address);
-            String fqdn = canonicalName != null && canonicalName.contains(".") ? canonicalName : null;
-            String hostname = extractHostname(canonicalName);
+            String dnsNameFromDomainController = reverseLookupAgainstConfiguredDns(ipAddress);
+            String fqdn = firstNonBlank(
+                    fullyQualifiedName(canonicalName),
+                    fullyQualifiedName(dnsNameFromDomainController)
+            );
+            String hostname = firstNonBlank(
+                    directHostname,
+                    extractHostname(dnsNameFromDomainController),
+                    extractHostname(canonicalName),
+                    fqdn
+            );
             Optional<EndpointDevice> matchingDevice = findMatchingDevice(ipAddress, hostname, fqdn);
 
             DiscoveredDeviceDto result = new DiscoveredDeviceDto(
@@ -242,12 +262,107 @@ public class SubnetScanService {
         }
     }
 
+    private String safeHostname(InetAddress address) {
+        try {
+            String hostName = address.getHostName();
+            if (hostName == null || hostName.isBlank() || hostName.equals(address.getHostAddress())) {
+                return null;
+            }
+            return extractHostname(hostName.trim());
+        } catch (Exception exception) {
+            return null;
+        }
+    }
+
+    private String reverseLookupAgainstConfiguredDns(String ipAddress) {
+        String dnsServerHost = resolveDnsServerHost();
+        if (dnsServerHost == null || dnsServerHost.isBlank()) {
+            return null;
+        }
+
+        Hashtable<String, String> environment = new Hashtable<>();
+        environment.put(Context.INITIAL_CONTEXT_FACTORY, "com.sun.jndi.dns.DnsContextFactory");
+        environment.put(Context.PROVIDER_URL, "dns://" + dnsServerHost + "/");
+
+        String reverseLookupName = buildReverseLookupName(ipAddress);
+        DirContext directoryContext = null;
+        try {
+            directoryContext = new InitialDirContext(environment);
+            Attributes attributes = directoryContext.getAttributes(reverseLookupName, new String[]{"PTR"});
+            Attribute ptrAttribute = attributes.get("PTR");
+            if (ptrAttribute == null) {
+                return null;
+            }
+            NamingEnumeration<?> values = ptrAttribute.getAll();
+            if (!values.hasMore()) {
+                return null;
+            }
+            Object value = values.next();
+            if (value == null) {
+                return null;
+            }
+            String resolvedName = value.toString().trim();
+            if (resolvedName.endsWith(".")) {
+                resolvedName = resolvedName.substring(0, resolvedName.length() - 1);
+            }
+            return resolvedName.isBlank() ? null : resolvedName;
+        } catch (Exception exception) {
+            log.debug("Reverse DNS lookup against configured DNS server failed for {}: {}", ipAddress, exception.getMessage());
+            return null;
+        } finally {
+            if (directoryContext != null) {
+                try {
+                    directoryContext.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    private String resolveDnsServerHost() {
+        String ldapUrl = ldapProperties.getUrl();
+        if (ldapUrl == null || ldapUrl.isBlank()) {
+            return null;
+        }
+        try {
+            URI uri = URI.create(ldapUrl.trim());
+            return uri.getHost();
+        } catch (Exception exception) {
+            log.debug("Unable to parse LDAP URL '{}' for DNS reverse lookup.", ldapUrl);
+            return null;
+        }
+    }
+
+    private String buildReverseLookupName(String ipAddress) {
+        String[] octets = ipAddress.split("\\.");
+        if (octets.length != 4) {
+            return ipAddress;
+        }
+        return octets[3] + "." + octets[2] + "." + octets[1] + "." + octets[0] + ".in-addr.arpa";
+    }
+
     private String extractHostname(String canonicalName) {
         if (canonicalName == null || canonicalName.isBlank()) {
             return null;
         }
         int dotIndex = canonicalName.indexOf('.');
         return dotIndex > 0 ? canonicalName.substring(0, dotIndex) : canonicalName;
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String fullyQualifiedName(String value) {
+        if (value == null || value.isBlank() || !value.contains(".")) {
+            return null;
+        }
+        return value;
     }
 
     private String buildSuggestedHostname(String ipAddress, String hostname) {

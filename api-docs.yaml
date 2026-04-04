@@ -189,6 +189,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DeviceDetailDto'
+  /devices/{id}/deploy-agent:
+    post:
+      tags: [Devices]
+      summary: Deploy Windows agent to the target device over WinRM
+      security:
+        - bearerAuth: [ ]
+      parameters:
+        - $ref: '#/components/parameters/UuidPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentDeploymentRequest'
+      responses:
+        '200':
+          description: Deployment result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentDeploymentResultDto'
   /devices/{id}/archive:
     post:
       tags: [Devices]
@@ -835,6 +856,44 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DiscoveredDeviceDto'
+    AgentDeploymentRequest:
+      type: object
+      required: [username, password]
+      properties:
+        targetHost:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+    AgentDeploymentResultDto:
+      type: object
+      properties:
+        deviceId:
+          type: string
+          format: uuid
+        deviceHostname:
+          type: string
+        targetHost:
+          type: string
+        success:
+          type: boolean
+        status:
+          type: string
+        message:
+          type: string
+        deploymentSourceDir:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
+          format: int64
     NetworkInterfaceDto:
       type: object
       properties:

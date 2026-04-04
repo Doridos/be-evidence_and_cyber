@@ -1,5 +1,6 @@
 package cz.fel.cvut.beevidence_and_cyber.controller;
 
+import cz.fel.cvut.beevidence_and_cyber.dto.AgentDeploymentRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceCreateRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceSubnetScanRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceUpdateRequest;
@@ -43,6 +44,12 @@ public class DeviceController {
     @PreAuthorize("hasRole('ADMIN')")
     public Object scanSubnet(@Valid @RequestBody DeviceSubnetScanRequest request) {
         return deviceService.scanSubnet(request, currentUserService.requireCurrentUser());
+    }
+
+    @PostMapping("/{id}/deploy-agent")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Object deployAgent(@PathVariable UUID id, @Valid @RequestBody AgentDeploymentRequest request) {
+        return deviceService.deployAgent(id, request, currentUserService.requireCurrentUser());
     }
 
     @PutMapping("/{id}")

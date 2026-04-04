@@ -13,6 +13,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @Service
@@ -215,8 +216,8 @@ public class AgentIngestionService {
                 session.setSnapshot(savedSnapshot);
                 session.setUsername(sessionPayload.username());
                 session.setDomain(sessionPayload.domain());
-                session.setSessionType(sessionPayload.sessionType() == null ? null : SessionTypeEnum.valueOf(sessionPayload.sessionType().toUpperCase()));
-                session.setState(sessionPayload.state() == null ? null : SessionStateEnum.valueOf(sessionPayload.state().toUpperCase()));
+                session.setSessionType(parseSessionType(sessionPayload.sessionType()));
+                session.setState(parseSessionState(sessionPayload.state()));
                 session.setLoginTime(now(sessionPayload.loginTime()));
                 loggedInSessionRepository.save(session);
             }
@@ -257,6 +258,48 @@ public class AgentIngestionService {
 
     private BigDecimal defaultDecimal(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private SessionTypeEnum parseSessionType(String rawValue) {
+        String normalizedValue = normalizeEnumValue(rawValue);
+        if (normalizedValue == null) {
+            return null;
+        }
+
+        try {
+            return SessionTypeEnum.valueOf(normalizedValue);
+        } catch (IllegalArgumentException exception) {
+            return null;
+        }
+    }
+
+    private SessionStateEnum parseSessionState(String rawValue) {
+        String normalizedValue = normalizeEnumValue(rawValue);
+        if (normalizedValue == null) {
+            return null;
+        }
+
+        try {
+            return SessionStateEnum.valueOf(normalizedValue);
+        } catch (IllegalArgumentException exception) {
+            return null;
+        }
+    }
+
+    private String normalizeEnumValue(String rawValue) {
+        if (rawValue == null) {
+            return null;
+        }
+
+        String normalizedValue = rawValue.trim();
+        if (normalizedValue.isEmpty()) {
+            return null;
+        }
+
+        return normalizedValue
+                .replace('-', '_')
+                .replace(' ', '_')
+                .toUpperCase(Locale.ROOT);
     }
 
     private List<DeviceSnapshotDto> mapSnapshots(EndpointDevice device) {

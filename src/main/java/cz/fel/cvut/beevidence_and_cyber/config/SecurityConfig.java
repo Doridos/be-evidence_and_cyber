@@ -26,7 +26,7 @@ import java.util.List;
 
 @Configuration
 @EnableMethodSecurity
-@EnableConfigurationProperties({LdapProperties.class, CorsProperties.class, AgentAccessProperties.class})
+@EnableConfigurationProperties({LdapProperties.class, CorsProperties.class, AgentAccessProperties.class, AgentDeploymentProperties.class})
 @RequiredArgsConstructor
 public class SecurityConfig {
 
@@ -43,6 +43,7 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/auth/**", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/deployment-packages/**", "/api/v1/deployment-packages/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/agents/**", "/api/v1/agents/**").permitAll()
                         .anyRequest().authenticated()
                 )

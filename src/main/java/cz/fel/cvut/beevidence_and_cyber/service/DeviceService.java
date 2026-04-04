@@ -29,6 +29,7 @@ public class DeviceService {
     private final DeviceLogEntryRepository deviceLogEntryRepository;
     private final FileSystemEventRepository fileSystemEventRepository;
     private final SubnetScanService subnetScanService;
+    private final AgentDeploymentService agentDeploymentService;
     private final ApiMapper apiMapper;
     private final AuditService auditService;
 
@@ -125,6 +126,10 @@ public class DeviceService {
 
     public DeviceSubnetScanResultDto scanSubnet(DeviceSubnetScanRequest request, User actor) {
         return subnetScanService.scan(request, actor);
+    }
+
+    public AgentDeploymentResultDto deployAgent(UUID deviceId, AgentDeploymentRequest request, User actor) {
+        return agentDeploymentService.deployAgent(findDevice(deviceId), request, actor);
     }
 
     public DeviceDetailDto toDetailDto(EndpointDevice device) {
