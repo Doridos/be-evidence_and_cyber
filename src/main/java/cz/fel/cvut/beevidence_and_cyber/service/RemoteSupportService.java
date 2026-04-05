@@ -1,13 +1,16 @@
 package cz.fel.cvut.beevidence_and_cyber.service;
 
 import cz.fel.cvut.beevidence_and_cyber.dao.ControlApproval;
+import cz.fel.cvut.beevidence_and_cyber.dao.EndpointDevice;
 import cz.fel.cvut.beevidence_and_cyber.dao.RemoteHelpRequest;
 import cz.fel.cvut.beevidence_and_cyber.dao.RemoteSession;
 import cz.fel.cvut.beevidence_and_cyber.dao.User;
 import cz.fel.cvut.beevidence_and_cyber.dto.*;
 import cz.fel.cvut.beevidence_and_cyber.enumeration.*;
+import cz.fel.cvut.beevidence_and_cyber.exception.BadRequestException;
 import cz.fel.cvut.beevidence_and_cyber.exception.NotFoundException;
 import cz.fel.cvut.beevidence_and_cyber.repository.ControlApprovalRepository;
+import cz.fel.cvut.beevidence_and_cyber.repository.EndpointDeviceRepository;
 import cz.fel.cvut.beevidence_and_cyber.repository.RemoteHelpRequestRepository;
 import cz.fel.cvut.beevidence_and_cyber.repository.RemoteSessionRepository;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +29,7 @@ public class RemoteSupportService {
     private final RemoteHelpRequestRepository remoteHelpRequestRepository;
     private final RemoteSessionRepository remoteSessionRepository;
     private final ControlApprovalRepository controlApprovalRepository;
+    private final EndpointDeviceRepository endpointDeviceRepository;
     private final ApiMapper apiMapper;
     private final AuditService auditService;
 
@@ -55,17 +59,51 @@ public class RemoteSupportService {
 
     @Transactional
     public RemoteSessionDto createRemoteSession(RemoteSessionCreateRequest request, User actor) {
-        RemoteHelpRequest helpRequest = findHelpRequest(request.helpRequestId());
+        RemoteHelpRequest helpRequest = request.helpRequestId() == null ? null : findHelpRequest(request.helpRequestId());
+        EndpointDevice device = resolveRemoteSessionDevice(request, helpRequest);
+
         RemoteSession session = new RemoteSession();
         session.setHelpRequest(helpRequest);
+        session.setDevice(device);
         session.setAdminUser(actor);
         session.setSessionType(RemoteSessionTypeEnum.valueOf(request.sessionType().toUpperCase()));
         session.setProvider(RemoteSessionProviderEnum.valueOf(request.provider().toUpperCase()));
-        session.setStatus(RemoteSessionStatusEnum.CONNECTING);
+        session.setStatus(RemoteSessionStatusEnum.ACTIVE);
         session.setStartedAt(LocalDateTime.now());
         RemoteSession saved = remoteSessionRepository.save(session);
+
+        if (helpRequest != null && helpRequest.getStatus() == HelpRequestStatusEnum.NEW) {
+            helpRequest.setStatus(HelpRequestStatusEnum.ACCEPTED);
+            helpRequest.setAcceptedByUser(actor);
+            helpRequest.setAcceptedAt(LocalDateTime.now());
+            remoteHelpRequestRepository.save(helpRequest);
+        }
+
         auditService.log(actor, ActorSourceEnum.WEB, "CREATE_REMOTE_SESSION", "REMOTE_SESSION", saved.getId(), AuditResultEnum.SUCCESS,
-                Map.of("helpRequestId", helpRequest.getId().toString()));
+                Map.of(
+                        "helpRequestId", helpRequest == null ? "" : helpRequest.getId().toString(),
+                        "deviceId", device.getId().toString(),
+                        "deviceHostname", device.getHostname()
+                ));
+        return apiMapper.toDto(saved);
+    }
+
+    @Transactional
+    public RemoteSessionDto completeRemoteSession(UUID remoteSessionId, User actor) {
+        RemoteSession session = remoteSessionRepository.findById(remoteSessionId)
+                .orElseThrow(() -> new NotFoundException("Remote session with id " + remoteSessionId + " not found"));
+
+        session.setStatus(RemoteSessionStatusEnum.ENDED);
+        session.setEndedAt(LocalDateTime.now());
+        RemoteSession saved = remoteSessionRepository.save(session);
+
+        if (saved.getHelpRequest() != null && saved.getHelpRequest().getStatus() != HelpRequestStatusEnum.CLOSED) {
+            saved.getHelpRequest().setStatus(HelpRequestStatusEnum.CLOSED);
+            remoteHelpRequestRepository.save(saved.getHelpRequest());
+        }
+
+        auditService.log(actor, ActorSourceEnum.WEB, "COMPLETE_REMOTE_SESSION", "REMOTE_SESSION", saved.getId(), AuditResultEnum.SUCCESS,
+                Map.of("deviceHostname", saved.getDevice().getHostname()));
         return apiMapper.toDto(saved);
     }
 
@@ -89,5 +127,16 @@ public class RemoteSupportService {
     private RemoteHelpRequest findHelpRequest(UUID id) {
         return remoteHelpRequestRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("Remote help request with id " + id + " not found"));
+    }
+
+    private EndpointDevice resolveRemoteSessionDevice(RemoteSessionCreateRequest request, RemoteHelpRequest helpRequest) {
+        if (helpRequest != null) {
+            return helpRequest.getDevice();
+        }
+        if (request.deviceId() == null) {
+            throw new BadRequestException("Pro vytvoření relace bez žádosti o pomoc je nutné zadat deviceId.");
+        }
+        return endpointDeviceRepository.findById(request.deviceId())
+                .orElseThrow(() -> new NotFoundException("Device with id " + request.deviceId() + " not found"));
     }
 }

@@ -49,6 +49,12 @@ public class RemoteSupportController {
         return remoteSupportService.createRemoteSession(request, currentUserService.requireCurrentUser());
     }
 
+    @PostMapping("/remote-sessions/{id}/complete")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Object completeRemoteSession(@PathVariable UUID id) {
+        return remoteSupportService.completeRemoteSession(id, currentUserService.requireCurrentUser());
+    }
+
     @PostMapping("/remote-sessions/{id}/approvals")
     @PreAuthorize("hasRole('ADMIN')")
     public Object createControlApproval(@PathVariable UUID id, @Valid @RequestBody ControlApprovalRequest request) {

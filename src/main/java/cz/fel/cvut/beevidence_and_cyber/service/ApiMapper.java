@@ -4,6 +4,8 @@ import cz.fel.cvut.beevidence_and_cyber.dao.*;
 import cz.fel.cvut.beevidence_and_cyber.dto.*;
 import org.springframework.stereotype.Component;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Comparator;
 import java.util.List;
 
@@ -200,9 +202,20 @@ public class ApiMapper {
     }
 
     public RemoteHelpRequestDto toDto(RemoteHelpRequest remoteHelpRequest) {
+        EndpointDevice device = remoteHelpRequest.getDevice();
+        String remoteAssistanceTarget = firstNonBlank(
+                device.getHostname(),
+                device.getPrimaryIp(),
+                device.getFqdn()
+        );
         return new RemoteHelpRequestDto(
                 remoteHelpRequest.getId(),
-                remoteHelpRequest.getDevice().getId(),
+                device.getId(),
+                device.getHostname(),
+                device.getFqdn(),
+                device.getPrimaryIp(),
+                remoteAssistanceTarget,
+                buildRemoteAssistanceUri(remoteAssistanceTarget),
                 remoteHelpRequest.getRequestedByUsername(),
                 remoteHelpRequest.getRequestedByDisplayName(),
                 remoteHelpRequest.getMessage(),
@@ -214,9 +227,20 @@ public class ApiMapper {
     }
 
     public RemoteSessionDto toDto(RemoteSession remoteSession) {
+        EndpointDevice device = remoteSession.getDevice();
+        String remoteAssistanceTarget = firstNonBlank(
+                device.getHostname(),
+                device.getPrimaryIp(),
+                device.getFqdn()
+        );
         return new RemoteSessionDto(
                 remoteSession.getId(),
-                remoteSession.getHelpRequest().getId(),
+                remoteSession.getHelpRequest() == null ? null : remoteSession.getHelpRequest().getId(),
+                device.getId(),
+                device.getHostname(),
+                device.getPrimaryIp(),
+                remoteAssistanceTarget,
+                buildRemoteAssistanceUri(remoteAssistanceTarget),
                 remoteSession.getAdminUser().getId(),
                 remoteSession.getSessionType() == null ? null : remoteSession.getSessionType().name(),
                 remoteSession.getProvider() == null ? null : remoteSession.getProvider().name(),
@@ -224,6 +248,22 @@ public class ApiMapper {
                 remoteSession.getStartedAt(),
                 remoteSession.getEndedAt()
         );
+    }
+
+    private String buildRemoteAssistanceUri(String targetHost) {
+        if (targetHost == null || targetHost.isBlank()) {
+            return null;
+        }
+        return "evidencecyber-ra://open?host=" + URLEncoder.encode(targetHost, StandardCharsets.UTF_8);
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     public ControlApprovalDto toDto(ControlApproval controlApproval) {

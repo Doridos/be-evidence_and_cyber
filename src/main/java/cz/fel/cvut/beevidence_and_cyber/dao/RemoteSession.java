@@ -22,9 +22,13 @@ import java.time.LocalDateTime;
 @Table(name = "remote_session")
 public class RemoteSession extends AbstractUuidEntity {
 
-    @ManyToOne(optional = false)
-    @JoinColumn(name = "help_request_id", nullable = false)
+    @ManyToOne
+    @JoinColumn(name = "help_request_id")
     private RemoteHelpRequest helpRequest;
+
+    @ManyToOne
+    @JoinColumn(name = "device_id")
+    private EndpointDevice device;
 
     @ManyToOne(optional = false)
     @JoinColumn(name = "admin_user_id", nullable = false)

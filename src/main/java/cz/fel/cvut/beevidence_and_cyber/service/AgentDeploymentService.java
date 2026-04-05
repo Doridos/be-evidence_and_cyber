@@ -36,6 +36,24 @@ import java.util.zip.ZipOutputStream;
 @RequiredArgsConstructor
 public class AgentDeploymentService {
 
+    private enum AgentRemoteOperation {
+        INSTALL("DEPLOY_AGENT", "Agent byl úspěšně vzdáleně nainstalován.", true, "install"),
+        UPDATE("UPDATE_AGENT", "Agent byl úspěšně vzdáleně aktualizován.", true, "install"),
+        UNINSTALL("UNINSTALL_AGENT", "Agent byl úspěšně vzdáleně odinstalován.", false, "uninstall");
+
+        private final String auditAction;
+        private final String successMessage;
+        private final boolean agentInstalled;
+        private final String helperOperation;
+
+        AgentRemoteOperation(String auditAction, String successMessage, boolean agentInstalled, String helperOperation) {
+            this.auditAction = auditAction;
+            this.successMessage = successMessage;
+            this.agentInstalled = agentInstalled;
+            this.helperOperation = helperOperation;
+        }
+    }
+
     private final AgentDeploymentProperties deploymentProperties;
     private final AgentAccessProperties agentAccessProperties;
     private final AgentDeploymentPackageService packageService;
@@ -43,26 +61,43 @@ public class AgentDeploymentService {
 
     @Transactional
     public AgentDeploymentResultDto deployAgent(EndpointDevice device, AgentDeploymentRequest request, User actor) {
+        return manageAgent(device, request, actor, AgentRemoteOperation.INSTALL);
+    }
+
+    @Transactional
+    public AgentDeploymentResultDto updateAgent(EndpointDevice device, AgentDeploymentRequest request, User actor) {
+        return manageAgent(device, request, actor, AgentRemoteOperation.UPDATE);
+    }
+
+    @Transactional
+    public AgentDeploymentResultDto uninstallAgent(EndpointDevice device, AgentDeploymentRequest request, User actor) {
+        return manageAgent(device, request, actor, AgentRemoteOperation.UNINSTALL);
+    }
+
+    private AgentDeploymentResultDto manageAgent(EndpointDevice device,
+                                                 AgentDeploymentRequest request,
+                                                 User actor,
+                                                 AgentRemoteOperation operation) {
         if (!deploymentProperties.isEnabled()) {
             throw new BadRequestException("Vzdálená instalace agenta je v konfiguraci backendu vypnutá.");
         }
 
         String targetHost = resolveTargetHost(device, request.targetHost());
         LocalDateTime startedAt = LocalDateTime.now();
-        log.info("Starting remote agent deployment. deviceId={}, deviceHostname={}, targetHost={}, requestedBy={}",
-                device.getId(), device.getHostname(), targetHost, actor.getAdUsername());
+        log.info("Starting remote agent operation. operation={}, deviceId={}, deviceHostname={}, targetHost={}, requestedBy={}",
+                operation.name(), device.getId(), device.getHostname(), targetHost, actor.getAdUsername());
 
         try {
             Path packageArchive = preparePackageArchive();
             String packageToken = packageService.registerPackage(packageArchive);
             String packageUrl = packageService.buildDownloadUrl(packageToken);
 
-            runRemoteInstallation(targetHost, request, packageUrl);
+            runRemoteOperation(targetHost, request, packageUrl, operation);
 
-            device.setAgentInstalled(true);
+            device.setAgentInstalled(operation.agentInstalled);
             LocalDateTime finishedAt = LocalDateTime.now();
-            auditService.log(actor, ActorSourceEnum.WEB, "DEPLOY_AGENT", "DEVICE", device.getId(), AuditResultEnum.SUCCESS,
-                    Map.of("targetHost", targetHost, "deviceHostname", device.getHostname(), "packageUrl", packageUrl));
+            auditService.log(actor, ActorSourceEnum.WEB, operation.auditAction, "DEVICE", device.getId(), AuditResultEnum.SUCCESS,
+                    Map.of("targetHost", targetHost, "deviceHostname", device.getHostname(), "packageUrl", packageUrl, "operation", operation.name()));
 
             return new AgentDeploymentResultDto(
                     device.getId(),
@@ -70,7 +105,7 @@ public class AgentDeploymentService {
                     targetHost,
                     true,
                     "SUCCESS",
-                    "Agent byl úspěšně vzdáleně nainstalován.",
+                    operation.successMessage,
                     Path.of(deploymentProperties.getPackageScriptsDir()).toAbsolutePath().normalize().toString(),
                     startedAt,
                     finishedAt,
@@ -78,9 +113,9 @@ public class AgentDeploymentService {
             );
         } catch (Exception exception) {
             LocalDateTime finishedAt = LocalDateTime.now();
-            auditService.log(actor, ActorSourceEnum.WEB, "DEPLOY_AGENT", "DEVICE", device.getId(), AuditResultEnum.FAILED,
-                    Map.of("targetHost", targetHost, "error", exception.getMessage()));
-            throw new BadRequestException("Vzdálená instalace agenta selhala: " + exception.getMessage());
+            auditService.log(actor, ActorSourceEnum.WEB, operation.auditAction, "DEVICE", device.getId(), AuditResultEnum.FAILED,
+                    Map.of("targetHost", targetHost, "error", exception.getMessage(), "operation", operation.name()));
+            throw new BadRequestException("Vzdálená správa agenta selhala: " + exception.getMessage());
         }
     }
 
@@ -251,7 +286,10 @@ public class AgentDeploymentService {
         }
     }
 
-    private void runRemoteInstallation(String targetHost, AgentDeploymentRequest request, String packageUrl) throws IOException, InterruptedException {
+    private void runRemoteOperation(String targetHost,
+                                    AgentDeploymentRequest request,
+                                    String packageUrl,
+                                    AgentRemoteOperation operation) throws IOException, InterruptedException {
         Path helperScriptPath = Path.of(deploymentProperties.getHelperScriptPath()).toAbsolutePath().normalize();
         if (!Files.exists(helperScriptPath)) {
             throw new BadRequestException("Python helper script pro WinRM deployment nebyl nalezen: " + helperScriptPath);
@@ -269,6 +307,8 @@ public class AgentDeploymentService {
         command.add(packageUrl);
         command.add("--staging-dir");
         command.add(deploymentProperties.getRemoteStagingDir());
+        command.add("--operation");
+        command.add(operation.helperOperation);
         command.add("--scheme");
         command.add(deploymentProperties.getWinrmScheme());
         command.add("--port");
@@ -285,7 +325,7 @@ public class AgentDeploymentService {
         Process process = processBuilder.start();
         String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
         int exitCode = process.waitFor();
-        log.info("Remote agent deployment output for {}: {}", targetHost, output);
+        log.info("Remote agent operation output for {} (operation={}): {}", targetHost, operation.name(), output);
 
         if (exitCode != 0) {
             throw new BadRequestException(output.isBlank()

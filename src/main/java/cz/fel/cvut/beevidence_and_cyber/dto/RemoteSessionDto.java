@@ -6,6 +6,11 @@ import java.util.UUID;
 public record RemoteSessionDto(
         UUID id,
         UUID helpRequestId,
+        UUID deviceId,
+        String deviceHostname,
+        String primaryIp,
+        String remoteAssistanceTarget,
+        String remoteAssistanceUri,
         UUID adminUserId,
         String sessionType,
         String provider,

@@ -6,6 +6,11 @@ import java.util.UUID;
 public record RemoteHelpRequestDto(
         UUID id,
         UUID deviceId,
+        String deviceHostname,
+        String deviceFqdn,
+        String primaryIp,
+        String remoteAssistanceTarget,
+        String remoteAssistanceUri,
         String requestedByUsername,
         String requestedByDisplayName,
         String message,
