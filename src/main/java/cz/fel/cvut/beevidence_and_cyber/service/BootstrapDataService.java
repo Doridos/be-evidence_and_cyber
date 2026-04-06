@@ -92,6 +92,14 @@ public class BootstrapDataService implements CommandLineRunner {
                 Map.of("kind", "snapshot_network_interface_removed")
         );
         ensureDetectionRule(
+                "OS_UPDATED",
+                "Aktualizace operačního systému",
+                "Detekuje změnu názvu, verze nebo buildu operačního systému mezi dvěma snapshoty zařízení.",
+                SeverityLevelEnum.HIGH,
+                DetectionSourceTypeEnum.TELEMETRY,
+                Map.of("kind", "snapshot_os_changed")
+        );
+        ensureDetectionRule(
                 "ELEVATED_POWERSHELL_PROCESS",
                 "Spuštění PowerShellu s elevovanými právy",
                 "Detekuje spuštění powershell.exe nebo pwsh.exe se zvýšenými oprávněními.",
@@ -122,6 +130,14 @@ public class BootstrapDataService implements CommandLineRunner {
                 SeverityLevelEnum.HIGH,
                 DetectionSourceTypeEnum.LOG,
                 Map.of("kind", "event_code", "eventCodes", List.of("4697", "7045"))
+        );
+        ensureDetectionRule(
+                "USB_DEVICE_CONNECTED",
+                "Připojení USB zařízení",
+                "Detekuje připojení nebo inicializaci USB zařízení podle systémových PnP událostí.",
+                SeverityLevelEnum.MEDIUM,
+                DetectionSourceTypeEnum.LOG,
+                Map.of("kind", "usb_system_event", "eventCodes", List.of("400", "410", "430", "20001"))
         );
         ensureDetectionRule(
                 "HOSTS_FILE_CHANGED",

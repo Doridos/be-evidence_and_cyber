@@ -153,6 +153,7 @@ public class DetectionService {
 
         DetectionRule addedRule = findEnabledRule("NETWORK_INTERFACE_ADDED").orElse(null);
         DetectionRule removedRule = findEnabledRule("NETWORK_INTERFACE_REMOVED").orElse(null);
+        DetectionRule osUpdatedRule = findEnabledRule("OS_UPDATED").orElse(null);
 
         Map<String, NetworkInterface> previousBySignature = previousInterfaces.stream()
                 .collect(Collectors.toMap(this::networkSignature, item -> item, (left, right) -> left, LinkedHashMap::new));
@@ -199,6 +200,18 @@ public class DetectionService {
                     "Na zařízení bylo detekováno odebrané síťové rozhraní: " + interfaceSummary,
                     currentSnapshot.getCollectedAt(),
                     buildSnapshotContext(device, previousSnapshot, currentSnapshot, List.of(), removedInterfaceMaps)
+            );
+        }
+
+        if (osUpdatedRule != null && hasOperatingSystemChanged(previousSnapshot, currentSnapshot)) {
+            createOrRefreshFinding(
+                    device,
+                    osUpdatedRule,
+                    "Aktualizace operačního systému",
+                    "Na zařízení byla detekována změna operačního systému z " +
+                            describeOperatingSystem(previousSnapshot) + " na " + describeOperatingSystem(currentSnapshot),
+                    currentSnapshot.getCollectedAt(),
+                    buildOsUpdateContext(device, previousSnapshot, currentSnapshot)
             );
         }
     }
@@ -289,6 +302,7 @@ public class DetectionService {
         DetectionRule failedBurstRule = findEnabledRule("FAILED_LOGON_BURST").orElse(null);
         DetectionRule rdpRule = findEnabledRule("RDP_LOGON").orElse(null);
         DetectionRule serviceRule = findEnabledRule("SERVICE_INSTALLED").orElse(null);
+        DetectionRule usbConnectedRule = findEnabledRule("USB_DEVICE_CONNECTED").orElse(null);
 
         for (DeviceLogEntry logEntry : logEntries) {
             String eventCode = safeValue(logEntry.getEventCode());
@@ -336,6 +350,17 @@ public class DetectionService {
                         "Instalace nové služby",
                         "Byla zaznamenána instalace služby " +
                                 safeValue(firstNonBlank(parsedPayload.get("ServiceName"), parsedPayload.get("Service File Name"), parsedPayload.get("ImagePath"))),
+                        logEntry.getOccurredAt(),
+                        buildLogContext(device, logEntry, parsedPayload)
+                );
+            }
+
+            if (usbConnectedRule != null && isUsbConnectionEvent(logEntry, parsedPayload)) {
+                createOrRefreshFinding(
+                        device,
+                        usbConnectedRule,
+                        "Připojeno USB zařízení",
+                        "Bylo zaznamenáno připojení USB zařízení " + detailSuffix(describeUsbDevice(logEntry, parsedPayload)).replaceFirst("^ \\| ", ""),
                         logEntry.getOccurredAt(),
                         buildLogContext(device, logEntry, parsedPayload)
                 );
@@ -415,6 +440,44 @@ public class DetectionService {
         }
 
         return false;
+    }
+
+    private boolean isUsbConnectionEvent(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
+        String eventCode = safeValue(logEntry.getEventCode());
+        if (!List.of("400", "410", "430", "20001").contains(eventCode)) {
+            return false;
+        }
+        String rawPayload = safeValue(logEntry.getRawPayload()).toLowerCase(Locale.ROOT);
+        String provider = safeValue(logEntry.getMessage()).toLowerCase(Locale.ROOT);
+        String candidate = firstNonBlank(
+                parsedPayload.get("DeviceInstanceId"),
+                parsedPayload.get("InstanceId"),
+                parsedPayload.get("DeviceId"),
+                parsedPayload.get("DeviceName"),
+                parsedPayload.get("DriverName"),
+                logEntry.getMessage(),
+                rawPayload
+        ).toLowerCase(Locale.ROOT);
+        return candidate.contains("usb")
+                || candidate.contains("usbstor")
+                || provider.contains("usb")
+                || rawPayload.contains("usb");
+    }
+
+    private String describeUsbDevice(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
+        String value = firstNonBlank(
+                parsedPayload.get("DeviceName"),
+                parsedPayload.get("FriendlyName"),
+                parsedPayload.get("DeviceDescription"),
+                parsedPayload.get("DriverName"),
+                parsedPayload.get("DeviceInstanceId"),
+                parsedPayload.get("InstanceId"),
+                parsedPayload.get("DeviceId")
+        );
+        if (!"-".equals(value)) {
+            return value;
+        }
+        return safeValue(logEntry.getMessage());
     }
 
     private boolean hasPrivilegedSecurityContext(String rawPayload) {
@@ -557,6 +620,24 @@ public class DetectionService {
         return context;
     }
 
+    private Map<String, Object> buildOsUpdateContext(EndpointDevice device,
+                                                     DeviceSnapshot previousSnapshot,
+                                                     DeviceSnapshot currentSnapshot) {
+        Map<String, Object> context = buildSnapshotContext(device, previousSnapshot, currentSnapshot, List.of(), List.of());
+        Map<String, Object> trigger = new LinkedHashMap<>();
+        trigger.put("type", "SNAPSHOT");
+        trigger.put("occurredAt", currentSnapshot.getCollectedAt());
+        trigger.put("previousSnapshotVersion", previousSnapshot.getVersionNo());
+        trigger.put("currentSnapshotVersion", currentSnapshot.getVersionNo());
+        trigger.put("previousOperatingSystem", describeOperatingSystem(previousSnapshot));
+        trigger.put("currentOperatingSystem", describeOperatingSystem(currentSnapshot));
+        trigger.put("osNameChanged", !Objects.equals(safeValue(previousSnapshot.getOsName()), safeValue(currentSnapshot.getOsName())));
+        trigger.put("osVersionChanged", !Objects.equals(safeValue(previousSnapshot.getOsVersion()), safeValue(currentSnapshot.getOsVersion())));
+        trigger.put("osBuildChanged", !Objects.equals(safeValue(previousSnapshot.getOsBuild()), safeValue(currentSnapshot.getOsBuild())));
+        context.put("trigger", trigger);
+        return context;
+    }
+
     private Map<String, Object> buildDeviceSummary(EndpointDevice device, DeviceSnapshot snapshot) {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("deviceId", device.getId());
@@ -644,6 +725,23 @@ public class DetectionService {
                 safeValue(networkInterface.getMacAddress()),
                 safeValue(networkInterface.getIpv4()),
                 safeValue(networkInterface.getIpv6()));
+    }
+
+    private boolean hasOperatingSystemChanged(DeviceSnapshot previousSnapshot, DeviceSnapshot currentSnapshot) {
+        return !Objects.equals(safeValue(previousSnapshot.getOsName()), safeValue(currentSnapshot.getOsName()))
+                || !Objects.equals(safeValue(previousSnapshot.getOsVersion()), safeValue(currentSnapshot.getOsVersion()))
+                || !Objects.equals(safeValue(previousSnapshot.getOsBuild()), safeValue(currentSnapshot.getOsBuild()));
+    }
+
+    private String describeOperatingSystem(DeviceSnapshot snapshot) {
+        return List.of(
+                        safeValue(snapshot.getOsName()),
+                        safeValue(snapshot.getOsVersion()),
+                        safeValue(snapshot.getOsBuild()).equals("-") ? null : "build " + safeValue(snapshot.getOsBuild())
+                ).stream()
+                .filter(Objects::nonNull)
+                .filter(value -> !value.isBlank() && !value.equals("-"))
+                .collect(Collectors.joining(" "));
     }
 
     private Map<String, String> parseEventXml(String rawPayload) {
