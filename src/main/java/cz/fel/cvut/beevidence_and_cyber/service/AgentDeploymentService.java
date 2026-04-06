@@ -9,6 +9,7 @@ import cz.fel.cvut.beevidence_and_cyber.dto.AgentDeploymentResultDto;
 import cz.fel.cvut.beevidence_and_cyber.enumeration.ActorSourceEnum;
 import cz.fel.cvut.beevidence_and_cyber.enumeration.AuditResultEnum;
 import cz.fel.cvut.beevidence_and_cyber.exception.BadRequestException;
+import cz.fel.cvut.beevidence_and_cyber.repository.EndpointDeviceRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -58,6 +59,7 @@ public class AgentDeploymentService {
     private final AgentAccessProperties agentAccessProperties;
     private final AgentDeploymentPackageService packageService;
     private final AuditService auditService;
+    private final EndpointDeviceRepository endpointDeviceRepository;
 
     @Transactional
     public AgentDeploymentResultDto deployAgent(EndpointDevice device, AgentDeploymentRequest request, User actor) {
@@ -95,6 +97,7 @@ public class AgentDeploymentService {
             runRemoteOperation(targetHost, request, packageUrl, operation);
 
             device.setAgentInstalled(operation.agentInstalled);
+            endpointDeviceRepository.saveAndFlush(device);
             LocalDateTime finishedAt = LocalDateTime.now();
             auditService.log(actor, ActorSourceEnum.WEB, operation.auditAction, "DEVICE", device.getId(), AuditResultEnum.SUCCESS,
                     Map.of("targetHost", targetHost, "deviceHostname", device.getHostname(), "packageUrl", packageUrl, "operation", operation.name()));

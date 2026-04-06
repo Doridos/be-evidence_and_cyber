@@ -20,12 +20,19 @@ def build_remote_script(package_url: str, staging_dir: str, operation: str) -> s
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $packageUrl = '{escaped_package_url}'
-$stagingDir = '{escaped_staging_dir}'
+$stagingRoot = '{escaped_staging_dir}'
 $scriptName = '{escaped_script_name}'
+$runId = [guid]::NewGuid().ToString()
+$stagingDir = Join-Path $stagingRoot $runId
 $zipPath = Join-Path $stagingDir 'agent-package.zip'
 
-if (Test-Path $stagingDir) {{
-    Remove-Item -Path $stagingDir -Recurse -Force
+New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
+
+Get-ChildItem -Path $stagingRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {{
+    try {{
+        Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction Stop
+    }} catch {{
+    }}
 }}
 
 New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null

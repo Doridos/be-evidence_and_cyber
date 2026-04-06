@@ -31,6 +31,7 @@ public class ApiMapper {
     }
 
     public DeviceDetailDto toDto(EndpointDevice device,
+                                 String effectiveStatus,
                                  List<DeviceSnapshotDto> snapshots,
                                  List<AgentHeartbeatDto> heartbeats,
                                  List<TelemetrySampleDto> telemetrySamples,
@@ -43,7 +44,7 @@ public class ApiMapper {
                 device.getFqdn(),
                 device.getPrimaryIp(),
                 device.getSite(),
-                device.getStatus().name(),
+                effectiveStatus,
                 device.isAgentInstalled(),
                 device.getDiscoveredAt(),
                 device.getArchivedAt(),
@@ -78,6 +79,7 @@ public class ApiMapper {
                 snapshot.getHostname(),
                 snapshot.getOsName(),
                 snapshot.getOsVersion(),
+                snapshot.getOsBuild(),
                 snapshot.getOsArchitecture(),
                 snapshot.getDomainName(),
                 snapshot.getCurrentLoggedUser(),

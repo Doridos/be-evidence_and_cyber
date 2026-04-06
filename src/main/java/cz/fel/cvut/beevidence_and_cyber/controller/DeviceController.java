@@ -52,6 +52,18 @@ public class DeviceController {
         return deviceService.deployAgent(id, request, currentUserService.requireCurrentUser());
     }
 
+    @PostMapping("/{id}/update-agent")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Object updateAgent(@PathVariable UUID id, @Valid @RequestBody AgentDeploymentRequest request) {
+        return deviceService.updateAgent(id, request, currentUserService.requireCurrentUser());
+    }
+
+    @PostMapping("/{id}/uninstall-agent")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Object uninstallAgent(@PathVariable UUID id, @Valid @RequestBody AgentDeploymentRequest request) {
+        return deviceService.uninstallAgent(id, request, currentUserService.requireCurrentUser());
+    }
+
     @PutMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public Object updateDevice(@PathVariable UUID id, @RequestBody DeviceUpdateRequest request) {

@@ -13,6 +13,7 @@ public record DeviceSnapshotDto(
         String hostname,
         String osName,
         String osVersion,
+        String osBuild,
         String osArchitecture,
         String domainName,
         String currentLoggedUser,

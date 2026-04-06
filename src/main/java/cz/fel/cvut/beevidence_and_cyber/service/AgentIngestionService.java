@@ -12,6 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -19,6 +21,7 @@ import java.util.Map;
 @Service
 @RequiredArgsConstructor
 public class AgentIngestionService {
+    private static final long LOG_RETENTION_DAYS = 3;
 
     private final EndpointDeviceRepository endpointDeviceRepository;
     private final DeviceSnapshotRepository deviceSnapshotRepository;
@@ -42,7 +45,7 @@ public class AgentIngestionService {
         updateDeviceFromAgentPayload(device, request.device());
         EndpointDevice savedDevice = endpointDeviceRepository.save(device);
 
-        DeviceSnapshot snapshot = createSnapshot(savedDevice, request.device());
+        DeviceSnapshot snapshot = createOrReuseSnapshot(savedDevice, request.device());
         AgentHeartbeat heartbeat = createHeartbeat(savedDevice, request.device(), request.telemetry());
         createTelemetry(savedDevice, request.telemetry());
 
@@ -51,6 +54,7 @@ public class AgentIngestionService {
 
         return apiMapper.toDto(
                 savedDevice,
+                DeviceStatusEnum.ACTIVE.name(),
                 mapSnapshots(savedDevice),
                 agentHeartbeatRepository.findByDeviceOrderByLastSeenAtDesc(savedDevice).stream().map(apiMapper::toDto).toList(),
                 telemetrySampleRepository.findByDeviceOrderByCollectedAtDesc(savedDevice).stream().map(apiMapper::toDto).toList(),
@@ -120,6 +124,8 @@ public class AgentIngestionService {
             }
         }
 
+        pruneOldCollectedData(device);
+
         auditService.log(null, ActorSourceEnum.AGENT, "INGEST_LOGS", "DEVICE", device.getId(), AuditResultEnum.SUCCESS,
                 Map.of("hostname", device.getHostname()));
     }
@@ -175,19 +181,31 @@ public class AgentIngestionService {
         }
     }
 
-    private DeviceSnapshot createSnapshot(EndpointDevice device, AgentDevicePayload payload) {
-        Integer lastVersion = deviceSnapshotRepository.findTopByDeviceOrderByVersionNoDesc(device)
-                .map(DeviceSnapshot::getVersionNo)
-                .orElse(0);
+    private DeviceSnapshot createOrReuseSnapshot(EndpointDevice device, AgentDevicePayload payload) {
+        LocalDateTime collectedAt = now(payload.collectedAt());
+        DeviceSnapshot latestSnapshot = deviceSnapshotRepository.findTopByDeviceOrderByVersionNoDesc(device).orElse(null);
+        if (latestSnapshot != null) {
+            List<NetworkInterface> latestInterfaces = networkInterfaceRepository.findBySnapshot(latestSnapshot);
+            List<LoggedInSession> latestSessions = loggedInSessionRepository.findBySnapshot(latestSnapshot);
+            if (snapshotMatches(latestSnapshot, latestInterfaces, latestSessions, payload)) {
+                return latestSnapshot;
+            }
+
+            latestSnapshot.setValidTo(collectedAt);
+            deviceSnapshotRepository.save(latestSnapshot);
+        }
+
+        int lastVersion = latestSnapshot == null ? 0 : latestSnapshot.getVersionNo();
 
         DeviceSnapshot snapshot = new DeviceSnapshot();
         snapshot.setDevice(device);
         snapshot.setVersionNo(lastVersion + 1);
-        snapshot.setCollectedAt(now(payload.collectedAt()));
-        snapshot.setValidFrom(now(payload.collectedAt()));
+        snapshot.setCollectedAt(collectedAt);
+        snapshot.setValidFrom(collectedAt);
         snapshot.setHostname(payload.hostname());
         snapshot.setOsName(payload.osName());
         snapshot.setOsVersion(payload.osVersion());
+        snapshot.setOsBuild(payload.osBuild());
         snapshot.setOsArchitecture(payload.osArchitecture());
         snapshot.setDomainName(payload.domainName());
         snapshot.setCurrentLoggedUser(payload.currentLoggedUser());
@@ -226,6 +244,75 @@ public class AgentIngestionService {
         return savedSnapshot;
     }
 
+    private boolean snapshotMatches(DeviceSnapshot snapshot,
+                                    List<NetworkInterface> networkInterfaces,
+                                    List<LoggedInSession> loggedInSessions,
+                                    AgentDevicePayload payload) {
+        if (!equalsNullable(snapshot.getHostname(), payload.hostname())) {
+            return false;
+        }
+        if (!equalsNullable(snapshot.getOsName(), payload.osName())) {
+            return false;
+        }
+        if (!equalsNullable(snapshot.getOsVersion(), payload.osVersion())) {
+            return false;
+        }
+        if (!equalsNullable(snapshot.getOsBuild(), payload.osBuild())) {
+            return false;
+        }
+        if (!equalsNullable(snapshot.getOsArchitecture(), payload.osArchitecture())) {
+            return false;
+        }
+        if (!equalsNullable(snapshot.getDomainName(), payload.domainName())) {
+            return false;
+        }
+        if (!equalsNullable(snapshot.getCurrentLoggedUser(), payload.currentLoggedUser())) {
+            return false;
+        }
+        if (!equalsNullable(snapshot.getJavaAgentVersion(), payload.agentVersion())) {
+            return false;
+        }
+        if (!equalsNullable(snapshot.getLastBootAt(), now(payload.lastBootAt()))) {
+            return false;
+        }
+
+        List<String> existingNetworkSignatures = networkInterfaces.stream()
+                .map(networkInterface -> String.join("|",
+                        safeValue(networkInterface.getName()),
+                        safeValue(networkInterface.getDisplayName()),
+                        safeValue(networkInterface.getMacAddress()),
+                        safeValue(networkInterface.getIpv4()),
+                        String.valueOf(networkInterface.isPrimary())))
+                .sorted()
+                .toList();
+        List<String> payloadNetworkSignatures = (payload.networkAdapters() == null ? List.<AgentNetworkAdapterPayload>of() : payload.networkAdapters()).stream()
+                .map(adapterPayload -> String.join("|",
+                        safeValue(adapterPayload.name()),
+                        safeValue(adapterPayload.displayName()),
+                        safeValue(adapterPayload.macAddress()),
+                        safeValue(firstItem(adapterPayload.ipv4Addresses())),
+                        String.valueOf(adapterPayload.primary())))
+                .sorted()
+                .toList();
+        if (!existingNetworkSignatures.equals(payloadNetworkSignatures)) {
+            return false;
+        }
+
+        List<String> existingSessionSignatures = loggedInSessions.stream()
+                .map(session -> String.join("|",
+                        safeValue(session.getUsername()),
+                        safeValue(session.getSessionType() == null ? null : session.getSessionType().name())))
+                .sorted()
+                .toList();
+        List<String> payloadSessionSignatures = (payload.loggedInSessions() == null ? List.<AgentLoggedInSessionPayload>of() : payload.loggedInSessions()).stream()
+                .map(sessionPayload -> String.join("|",
+                        safeValue(sessionPayload.username()),
+                        safeValue(normalizeEnumValue(sessionPayload.sessionType()))))
+                .sorted()
+                .toList();
+        return existingSessionSignatures.equals(payloadSessionSignatures);
+    }
+
     private AgentHeartbeat createHeartbeat(EndpointDevice device, AgentDevicePayload payload, AgentTelemetryPayload telemetryPayload) {
         AgentHeartbeat heartbeat = new AgentHeartbeat();
         heartbeat.setDevice(device);
@@ -252,8 +339,22 @@ public class AgentIngestionService {
         return offsetDateTime == null ? LocalDateTime.now() : offsetDateTime.toLocalDateTime();
     }
 
+    private void pruneOldCollectedData(EndpointDevice device) {
+        LocalDateTime retentionCutoff = LocalDateTime.now().minusDays(LOG_RETENTION_DAYS);
+        deviceLogEntryRepository.deleteByDeviceAndOccurredAtBefore(device, retentionCutoff);
+        fileSystemEventRepository.deleteByDeviceAndOccurredAtBefore(device, retentionCutoff);
+    }
+
     private String firstItem(List<String> items) {
         return items == null || items.isEmpty() ? null : items.getFirst();
+    }
+
+    private boolean equalsNullable(Object left, Object right) {
+        return left == null ? right == null : left.equals(right);
+    }
+
+    private String safeValue(String value) {
+        return value == null ? "" : value;
     }
 
     private BigDecimal defaultDecimal(BigDecimal value) {

@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +20,8 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class DeviceService {
+
+    private static final Duration HEARTBEAT_INACTIVITY_THRESHOLD = Duration.ofMinutes(5);
 
     private final EndpointDeviceRepository endpointDeviceRepository;
     private final DeviceSnapshotRepository deviceSnapshotRepository;
@@ -34,11 +37,11 @@ public class DeviceService {
     private final AuditService auditService;
 
     public List<DeviceDetailDto> getAllDevices() {
-        return endpointDeviceRepository.findAll().stream().map(this::toDetailDto).toList();
+        return endpointDeviceRepository.findAll().stream().map(this::toSummaryDto).toList();
     }
 
     public DeviceDetailDto getDevice(UUID id) {
-        return toDetailDto(findDevice(id));
+        return toSummaryDto(findDevice(id));
     }
 
     public EndpointDevice findDevice(UUID id) {
@@ -66,7 +69,7 @@ public class DeviceService {
 
         auditService.log(actor, ActorSourceEnum.WEB, "CREATE_DEVICE", "DEVICE", saved.getId(), AuditResultEnum.SUCCESS,
                 Map.of("hostname", saved.getHostname()));
-        return toDetailDto(saved);
+        return toSummaryDto(saved);
     }
 
     @Transactional
@@ -90,7 +93,7 @@ public class DeviceService {
         EndpointDevice saved = endpointDeviceRepository.save(device);
         auditService.log(actor, ActorSourceEnum.WEB, "UPDATE_DEVICE", "DEVICE", saved.getId(), AuditResultEnum.SUCCESS,
                 Map.of("hostname", saved.getHostname()));
-        return toDetailDto(saved);
+        return toSummaryDto(saved);
     }
 
     @Transactional
@@ -101,7 +104,7 @@ public class DeviceService {
         EndpointDevice saved = endpointDeviceRepository.save(device);
         auditService.log(actor, ActorSourceEnum.WEB, "ARCHIVE_DEVICE", "DEVICE", saved.getId(), AuditResultEnum.SUCCESS,
                 Map.of("hostname", saved.getHostname()));
-        return toDetailDto(saved);
+        return toSummaryDto(saved);
     }
 
     public List<DeviceSnapshotDto> getSnapshots(UUID deviceId) {
@@ -132,15 +135,55 @@ public class DeviceService {
         return agentDeploymentService.deployAgent(findDevice(deviceId), request, actor);
     }
 
+    public AgentDeploymentResultDto updateAgent(UUID deviceId, AgentDeploymentRequest request, User actor) {
+        return agentDeploymentService.updateAgent(findDevice(deviceId), request, actor);
+    }
+
+    public AgentDeploymentResultDto uninstallAgent(UUID deviceId, AgentDeploymentRequest request, User actor) {
+        return agentDeploymentService.uninstallAgent(findDevice(deviceId), request, actor);
+    }
+
     public DeviceDetailDto toDetailDto(EndpointDevice device) {
+        List<AgentHeartbeatDto> heartbeats = agentHeartbeatRepository.findByDeviceOrderByLastSeenAtDesc(device).stream().map(apiMapper::toDto).toList();
         return apiMapper.toDto(
                 device,
+                resolveEffectiveStatus(device, heartbeats),
                 mapSnapshots(device),
-                agentHeartbeatRepository.findByDeviceOrderByLastSeenAtDesc(device).stream().map(apiMapper::toDto).toList(),
+                heartbeats,
                 telemetrySampleRepository.findByDeviceOrderByCollectedAtDesc(device).stream().map(apiMapper::toDto).toList(),
                 deviceLogEntryRepository.findByDeviceOrderByOccurredAtDesc(device).stream().map(apiMapper::toDto).toList(),
                 fileSystemEventRepository.findByDeviceOrderByOccurredAtDesc(device).stream().map(apiMapper::toDto).toList()
         );
+    }
+
+    public DeviceDetailDto toSummaryDto(EndpointDevice device) {
+        List<AgentHeartbeatDto> heartbeats = agentHeartbeatRepository.findByDeviceOrderByLastSeenAtDesc(device).stream().limit(1).map(apiMapper::toDto).toList();
+        return apiMapper.toDto(
+                device,
+                resolveEffectiveStatus(device, heartbeats),
+                List.of(),
+                heartbeats,
+                List.of(),
+                List.of(),
+                List.of()
+        );
+    }
+
+    private String resolveEffectiveStatus(EndpointDevice device, List<AgentHeartbeatDto> heartbeats) {
+        if (device.getStatus() == DeviceStatusEnum.ARCHIVED) {
+            return DeviceStatusEnum.ARCHIVED.name();
+        }
+        if (!device.isAgentInstalled()) {
+            return device.getStatus().name();
+        }
+        LocalDateTime lastSeenAt = heartbeats.stream()
+                .map(AgentHeartbeatDto::lastSeenAt)
+                .findFirst()
+                .orElse(null);
+        if (lastSeenAt == null || lastSeenAt.isBefore(LocalDateTime.now().minus(HEARTBEAT_INACTIVITY_THRESHOLD))) {
+            return DeviceStatusEnum.UNREACHABLE.name();
+        }
+        return DeviceStatusEnum.ACTIVE.name();
     }
 
     private List<DeviceSnapshotDto> mapSnapshots(EndpointDevice device) {

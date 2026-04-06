@@ -43,6 +43,8 @@ public class DeviceSnapshot extends AbstractUuidEntity {
     @Column(nullable = false)
     private String osVersion;
 
+    private String osBuild;
+
     @Column(nullable = false)
     private String osArchitecture;
 
