@@ -35,13 +35,37 @@ public class CommandService {
     private final AuditService auditService;
 
     public List<CommandRequestDto> getAllCommandRequests() {
-        return commandRequestRepository.findAllByOrderByCreatedAtDesc().stream().map(apiMapper::toDto).toList();
+        return commandRequestRepository.findAllByOrderByCreatedAtDesc().stream().map(this::toDtoWithLatestExecution).toList();
     }
 
     public CommandRequestDto getCommandRequest(UUID id) {
         CommandRequest commandRequest = commandRequestRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("Command request with id " + id + " not found"));
-        return apiMapper.toDto(commandRequest);
+        return toDtoWithLatestExecution(commandRequest);
+    }
+
+    public List<CommandRequestDto> getCommandRequestsForDevice(UUID deviceId) {
+        EndpointDevice device = deviceService.findDevice(deviceId);
+        return commandRequestRepository.findByDeviceOrderByCreatedAtDesc(device).stream().map(this::toDtoWithLatestExecution).toList();
+    }
+
+    @Transactional
+    public List<AgentPendingCommandDto> claimPendingCommands(String deviceHostname) {
+        EndpointDevice device = deviceService.findDeviceByHostname(deviceHostname);
+        List<CommandRequest> pendingCommands = commandRequestRepository.findByDeviceAndStatusOrderByCreatedAtAsc(device, CommandStatusEnum.PENDING);
+        if (pendingCommands.isEmpty()) {
+            return List.of();
+        }
+
+        List<AgentPendingCommandDto> response = pendingCommands.stream()
+                .map(apiMapper::toPendingCommandDto)
+                .toList();
+
+        for (CommandRequest commandRequest : pendingCommands) {
+            commandRequest.setStatus(CommandStatusEnum.SENT);
+        }
+        commandRequestRepository.saveAll(pendingCommands);
+        return response;
     }
 
     @Transactional
@@ -57,7 +81,7 @@ public class CommandService {
         CommandRequest saved = commandRequestRepository.save(commandRequest);
         auditService.log(actor, ActorSourceEnum.WEB, "CREATE_COMMAND_REQUEST", "COMMAND_REQUEST", saved.getId(), AuditResultEnum.SUCCESS,
                 Map.of("commandType", saved.getCommandType().name()));
-        return apiMapper.toDto(saved);
+        return toDtoWithLatestExecution(saved);
     }
 
     @Transactional
@@ -77,6 +101,7 @@ public class CommandService {
         execution.setExitCode(request.exitCode());
         execution.setResultSummary(request.resultSummary());
         execution.setErrorMessage(request.errorMessage());
+        execution.setResultJson(request.resultJson());
 
         if (request.finishedAt() != null) {
             commandRequest.setStatus(request.exitCode() != null && request.exitCode() == 0 ? CommandStatusEnum.SUCCESS : CommandStatusEnum.FAILED);
@@ -91,5 +116,9 @@ public class CommandService {
         auditService.log(actor, ActorSourceEnum.WEB, "CREATE_COMMAND_EXECUTION", "COMMAND_EXECUTION", saved.getId(), AuditResultEnum.SUCCESS,
                 Map.of("commandRequestId", commandRequest.getId().toString()));
         return apiMapper.toDto(saved);
+    }
+
+    private CommandRequestDto toDtoWithLatestExecution(CommandRequest commandRequest) {
+        return apiMapper.toDto(commandRequest, commandExecutionRepository.findTopByCommandRequestOrderByStartedAtDescIdDesc(commandRequest));
     }
 }

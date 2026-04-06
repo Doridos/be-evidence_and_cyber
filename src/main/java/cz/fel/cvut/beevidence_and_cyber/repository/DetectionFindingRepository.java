@@ -1,6 +1,7 @@
 package cz.fel.cvut.beevidence_and_cyber.repository;
 
 import cz.fel.cvut.beevidence_and_cyber.dao.DetectionFinding;
+import cz.fel.cvut.beevidence_and_cyber.dao.DetectionRule;
 import cz.fel.cvut.beevidence_and_cyber.dao.EndpointDevice;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -9,4 +10,5 @@ import java.util.UUID;
 
 public interface DetectionFindingRepository extends JpaRepository<DetectionFinding, UUID> {
     List<DetectionFinding> findByDeviceOrderByLastSeenAtDesc(EndpointDevice device);
+    List<DetectionFinding> findTop10ByDeviceAndRuleOrderByLastSeenAtDesc(EndpointDevice device, DetectionRule rule);
 }

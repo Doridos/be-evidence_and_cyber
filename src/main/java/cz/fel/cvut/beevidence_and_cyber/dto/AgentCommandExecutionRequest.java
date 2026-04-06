@@ -3,6 +3,7 @@ package cz.fel.cvut.beevidence_and_cyber.dto;
 import jakarta.validation.constraints.NotNull;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.UUID;
 
 public record AgentCommandExecutionRequest(
@@ -12,6 +13,7 @@ public record AgentCommandExecutionRequest(
         OffsetDateTime finishedAt,
         Integer exitCode,
         String resultSummary,
-        String errorMessage
+        String errorMessage,
+        Map<String, Object> resultJson
 ) {
 }

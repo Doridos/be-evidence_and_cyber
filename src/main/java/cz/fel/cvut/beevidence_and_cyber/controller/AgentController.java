@@ -5,6 +5,7 @@ import cz.fel.cvut.beevidence_and_cyber.dto.AgentHeartbeatRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.AgentHelpRequestInput;
 import cz.fel.cvut.beevidence_and_cyber.dto.AgentLogIngestionRequest;
 import cz.fel.cvut.beevidence_and_cyber.service.AgentIngestionService;
+import cz.fel.cvut.beevidence_and_cyber.service.CommandService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.*;
 public class AgentController {
 
     private final AgentIngestionService agentIngestionService;
+    private final CommandService commandService;
 
     @PostMapping("/heartbeat")
     public ResponseEntity<?> heartbeat(@Valid @RequestBody AgentHeartbeatRequest request) {
@@ -36,5 +38,10 @@ public class AgentController {
     @PostMapping("/command-executions")
     public ResponseEntity<?> commandExecution(@Valid @RequestBody AgentCommandExecutionRequest request) {
         return ResponseEntity.ok(agentIngestionService.ingestCommandExecution(request));
+    }
+
+    @GetMapping("/commands/pending")
+    public ResponseEntity<?> getPendingCommands(@RequestParam String deviceHostname) {
+        return ResponseEntity.ok(commandService.claimPendingCommands(deviceHostname));
     }
 }

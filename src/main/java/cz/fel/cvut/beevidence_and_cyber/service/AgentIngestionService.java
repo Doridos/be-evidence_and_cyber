@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -22,6 +23,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class AgentIngestionService {
     private static final long LOG_RETENTION_DAYS = 3;
+    private static final ZoneId APPLICATION_ZONE = ZoneId.of("Europe/Prague");
 
     private final EndpointDeviceRepository endpointDeviceRepository;
     private final DeviceSnapshotRepository deviceSnapshotRepository;
@@ -36,6 +38,7 @@ public class AgentIngestionService {
     private final CommandExecutionRepository commandExecutionRepository;
     private final AuditService auditService;
     private final ApiMapper apiMapper;
+    private final DetectionService detectionService;
 
     @Transactional
     public DeviceDetailDto ingestHeartbeat(AgentHeartbeatRequest request) {
@@ -45,9 +48,22 @@ public class AgentIngestionService {
         updateDeviceFromAgentPayload(device, request.device());
         EndpointDevice savedDevice = endpointDeviceRepository.save(device);
 
+        DeviceSnapshot previousSnapshot = deviceSnapshotRepository.findTopByDeviceOrderByVersionNoDesc(savedDevice).orElse(null);
+        List<NetworkInterface> previousInterfaces = previousSnapshot == null ? List.of() : networkInterfaceRepository.findBySnapshot(previousSnapshot);
+
         DeviceSnapshot snapshot = createOrReuseSnapshot(savedDevice, request.device());
         AgentHeartbeat heartbeat = createHeartbeat(savedDevice, request.device(), request.telemetry());
         createTelemetry(savedDevice, request.telemetry());
+
+        if (previousSnapshot != null && !previousSnapshot.getId().equals(snapshot.getId())) {
+            detectionService.evaluateSnapshotChanges(
+                    savedDevice,
+                    previousSnapshot,
+                    previousInterfaces,
+                    snapshot,
+                    networkInterfaceRepository.findBySnapshot(snapshot)
+            );
+        }
 
         auditService.log(null, ActorSourceEnum.AGENT, "INGEST_HEARTBEAT", "DEVICE", savedDevice.getId(), AuditResultEnum.SUCCESS,
                 Map.of("hostname", savedDevice.getHostname(), "snapshotId", snapshot.getId().toString(), "heartbeatId", heartbeat.getId().toString()));
@@ -96,6 +112,7 @@ public class AgentIngestionService {
         EndpointDevice device = endpointDeviceRepository.findByHostnameIgnoreCase(request.deviceHostname())
                 .orElseThrow(() -> new NotFoundException("Device with hostname " + request.deviceHostname() + " not found"));
 
+        List<DeviceLogEntry> savedLogEntries = new ArrayList<>();
         if (request.logEntries() != null) {
             for (AgentLogEntryPayload payload : request.logEntries()) {
                 DeviceLogEntry logEntry = new DeviceLogEntry();
@@ -106,10 +123,11 @@ public class AgentIngestionService {
                 logEntry.setEventCode(payload.eventCode());
                 logEntry.setMessage(payload.message());
                 logEntry.setRawPayload(payload.rawPayload());
-                deviceLogEntryRepository.save(logEntry);
+                savedLogEntries.add(deviceLogEntryRepository.save(logEntry));
             }
         }
 
+        List<FileSystemEvent> savedFileEvents = new ArrayList<>();
         if (request.fileSystemEvents() != null) {
             for (AgentFileSystemEventPayload payload : request.fileSystemEvents()) {
                 FileSystemEvent event = new FileSystemEvent();
@@ -120,10 +138,11 @@ public class AgentIngestionService {
                 event.setActorUsername(payload.actorUsername());
                 event.setSourceLog(payload.sourceLog());
                 event.setDetailsJson(payload.detailsJson());
-                fileSystemEventRepository.save(event);
+                savedFileEvents.add(fileSystemEventRepository.save(event));
             }
         }
 
+        detectionService.evaluateCollectedSignals(device, savedLogEntries, savedFileEvents);
         pruneOldCollectedData(device);
 
         auditService.log(null, ActorSourceEnum.AGENT, "INGEST_LOGS", "DEVICE", device.getId(), AuditResultEnum.SUCCESS,
@@ -147,6 +166,7 @@ public class AgentIngestionService {
         execution.setExitCode(request.exitCode());
         execution.setResultSummary(request.resultSummary());
         execution.setErrorMessage(request.errorMessage());
+        execution.setResultJson(request.resultJson());
 
         if (execution.getFinishedAt() != null) {
             commandRequest.setStatus(request.exitCode() != null && request.exitCode() == 0 ? CommandStatusEnum.SUCCESS : CommandStatusEnum.FAILED);
@@ -336,11 +356,13 @@ public class AgentIngestionService {
     }
 
     private LocalDateTime now(OffsetDateTime offsetDateTime) {
-        return offsetDateTime == null ? LocalDateTime.now() : offsetDateTime.toLocalDateTime();
+        return offsetDateTime == null
+                ? LocalDateTime.now(APPLICATION_ZONE)
+                : offsetDateTime.atZoneSameInstant(APPLICATION_ZONE).toLocalDateTime();
     }
 
     private void pruneOldCollectedData(EndpointDevice device) {
-        LocalDateTime retentionCutoff = LocalDateTime.now().minusDays(LOG_RETENTION_DAYS);
+        LocalDateTime retentionCutoff = LocalDateTime.now(APPLICATION_ZONE).minusDays(LOG_RETENTION_DAYS);
         deviceLogEntryRepository.deleteByDeviceAndOccurredAtBefore(device, retentionCutoff);
         fileSystemEventRepository.deleteByDeviceAndOccurredAtBefore(device, retentionCutoff);
     }

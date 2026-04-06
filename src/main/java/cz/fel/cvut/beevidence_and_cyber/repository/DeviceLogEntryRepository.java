@@ -10,5 +10,6 @@ import java.util.UUID;
 
 public interface DeviceLogEntryRepository extends JpaRepository<DeviceLogEntry, UUID> {
     List<DeviceLogEntry> findByDeviceOrderByOccurredAtDesc(EndpointDevice device);
+    List<DeviceLogEntry> findByDeviceAndOccurredAtBetweenOrderByOccurredAtAsc(EndpointDevice device, LocalDateTime from, LocalDateTime to);
     void deleteByDeviceAndOccurredAtBefore(EndpointDevice device, LocalDateTime occurredAt);
 }

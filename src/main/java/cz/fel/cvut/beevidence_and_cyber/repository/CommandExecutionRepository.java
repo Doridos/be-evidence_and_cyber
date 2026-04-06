@@ -9,4 +9,5 @@ import java.util.UUID;
 
 public interface CommandExecutionRepository extends JpaRepository<CommandExecution, UUID> {
     List<CommandExecution> findByCommandRequest(CommandRequest commandRequest);
+    CommandExecution findTopByCommandRequestOrderByStartedAtDescIdDesc(CommandRequest commandRequest);
 }

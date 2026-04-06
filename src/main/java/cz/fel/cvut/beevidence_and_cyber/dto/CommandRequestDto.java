@@ -7,10 +7,13 @@ import java.util.UUID;
 public record CommandRequestDto(
         UUID id,
         UUID deviceId,
+        String deviceHostname,
         UUID requestedByUserId,
+        String requestedByUsername,
         String commandType,
         String status,
         Map<String, Object> payloadJson,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        CommandExecutionDto latestExecution
 ) {
 }

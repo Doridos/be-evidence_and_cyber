@@ -3,6 +3,7 @@ package cz.fel.cvut.beevidence_and_cyber.dto;
 import jakarta.validation.constraints.NotNull;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.UUID;
 
 public record CommandExecutionCreateRequest(
@@ -12,6 +13,7 @@ public record CommandExecutionCreateRequest(
         LocalDateTime finishedAt,
         Integer exitCode,
         String resultSummary,
-        String errorMessage
+        String errorMessage,
+        Map<String, Object> resultJson
 ) {
 }

@@ -10,5 +10,6 @@ import java.util.UUID;
 
 public interface FileSystemEventRepository extends JpaRepository<FileSystemEvent, UUID> {
     List<FileSystemEvent> findByDeviceOrderByOccurredAtDesc(EndpointDevice device);
+    List<FileSystemEvent> findByDeviceAndOccurredAtBetweenOrderByOccurredAtAsc(EndpointDevice device, LocalDateTime from, LocalDateTime to);
     void deleteByDeviceAndOccurredAtBefore(EndpointDevice device, LocalDateTime occurredAt);
 }

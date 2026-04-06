@@ -8,8 +8,11 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 @Getter
 @Setter
@@ -37,4 +40,8 @@ public class CommandExecution extends AbstractUuidEntity {
 
     @Column(columnDefinition = "TEXT")
     private String errorMessage;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
+    private Map<String, Object> resultJson;
 }

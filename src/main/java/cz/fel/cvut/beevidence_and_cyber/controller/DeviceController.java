@@ -4,6 +4,7 @@ import cz.fel.cvut.beevidence_and_cyber.dto.AgentDeploymentRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceCreateRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceSubnetScanRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceUpdateRequest;
+import cz.fel.cvut.beevidence_and_cyber.service.CommandService;
 import cz.fel.cvut.beevidence_and_cyber.service.CurrentUserService;
 import cz.fel.cvut.beevidence_and_cyber.service.DeviceService;
 import jakarta.validation.Valid;
@@ -20,6 +21,7 @@ import java.util.UUID;
 public class DeviceController {
 
     private final DeviceService deviceService;
+    private final CommandService commandService;
     private final CurrentUserService currentUserService;
 
     @GetMapping
@@ -104,5 +106,11 @@ public class DeviceController {
     @PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
     public List<?> getFileSystemEvents(@PathVariable UUID id) {
         return deviceService.getFileSystemEvents(id);
+    }
+
+    @GetMapping("/{id}/command-requests")
+    @PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
+    public List<?> getCommandRequests(@PathVariable UUID id) {
+        return commandService.getCommandRequestsForDevice(id);
     }
 }

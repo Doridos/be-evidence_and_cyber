@@ -6,8 +6,11 @@ import org.springframework.stereotype.Component;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Component
 public class ApiMapper {
@@ -178,14 +181,17 @@ public class ApiMapper {
         return new DetectionFindingDto(
                 detectionFinding.getId(),
                 detectionFinding.getDevice().getId(),
+                detectionFinding.getDevice().getHostname(),
                 detectionFinding.getRule() == null ? null : detectionFinding.getRule().getId(),
+                detectionFinding.getRule() == null ? null : detectionFinding.getRule().getCode(),
                 detectionFinding.getStatus() == null ? null : detectionFinding.getStatus().name(),
                 detectionFinding.getSeverity() == null ? null : detectionFinding.getSeverity().name(),
                 detectionFinding.getTitle(),
                 detectionFinding.getDescription(),
                 detectionFinding.getFirstSeenAt(),
                 detectionFinding.getLastSeenAt(),
-                detectionFinding.isCreatedByAi()
+                detectionFinding.isCreatedByAi(),
+                detectionFinding.getContextJson()
         );
     }
 
@@ -281,14 +287,21 @@ public class ApiMapper {
     }
 
     public CommandRequestDto toDto(CommandRequest commandRequest) {
+        return toDto(commandRequest, null);
+    }
+
+    public CommandRequestDto toDto(CommandRequest commandRequest, CommandExecution latestExecution) {
         return new CommandRequestDto(
                 commandRequest.getId(),
                 commandRequest.getDevice().getId(),
+                commandRequest.getDevice().getHostname(),
                 commandRequest.getRequestedByUser().getId(),
+                commandRequest.getRequestedByUser().getAdUsername(),
                 commandRequest.getCommandType() == null ? null : commandRequest.getCommandType().name(),
                 commandRequest.getStatus() == null ? null : commandRequest.getStatus().name(),
-                commandRequest.getPayloadJson(),
-                commandRequest.getCreatedAt()
+                sanitizeCommandPayload(commandRequest.getPayloadJson()),
+                commandRequest.getCreatedAt(),
+                latestExecution == null ? null : toDto(latestExecution)
         );
     }
 
@@ -301,8 +314,70 @@ public class ApiMapper {
                 commandExecution.getFinishedAt(),
                 commandExecution.getExitCode(),
                 commandExecution.getResultSummary(),
-                commandExecution.getErrorMessage()
+                commandExecution.getErrorMessage(),
+                commandExecution.getResultJson()
         );
+    }
+
+    public AgentPendingCommandDto toPendingCommandDto(CommandRequest commandRequest) {
+        return new AgentPendingCommandDto(
+                commandRequest.getId(),
+                commandRequest.getCommandType() == null ? null : commandRequest.getCommandType().name(),
+                commandRequest.getPayloadJson(),
+                commandRequest.getCreatedAt()
+        );
+    }
+
+    private Map<String, Object> sanitizeCommandPayload(Map<String, Object> payloadJson) {
+        if (payloadJson == null) {
+            return null;
+        }
+        return sanitizeMap(payloadJson);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> sanitizeMap(Map<String, Object> values) {
+        Map<String, Object> sanitized = new LinkedHashMap<>();
+        values.forEach((key, value) -> {
+            if (key != null && isSensitiveKey(key)) {
+                sanitized.put(key, maskSensitiveValue(value));
+            } else if (value instanceof Map<?, ?> nestedMap) {
+                sanitized.put(key, sanitizeMap((Map<String, Object>) nestedMap));
+            } else if (value instanceof List<?> nestedList) {
+                sanitized.put(key, sanitizeList(nestedList));
+            } else {
+                sanitized.put(key, value);
+            }
+        });
+        return sanitized;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Object> sanitizeList(List<?> values) {
+        List<Object> sanitized = new ArrayList<>(values.size());
+        for (Object value : values) {
+            if (value instanceof Map<?, ?> nestedMap) {
+                sanitized.add(sanitizeMap((Map<String, Object>) nestedMap));
+            } else if (value instanceof List<?> nestedList) {
+                sanitized.add(sanitizeList(nestedList));
+            } else {
+                sanitized.add(value);
+            }
+        }
+        return sanitized;
+    }
+
+    private boolean isSensitiveKey(String key) {
+        String normalized = key.toLowerCase();
+        return normalized.contains("password") || normalized.contains("secret");
+    }
+
+    private Object maskSensitiveValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String stringValue = String.valueOf(value);
+        return stringValue.isBlank() ? stringValue : "********";
     }
 
     public AuditLogDto toDto(AuditLog auditLog) {

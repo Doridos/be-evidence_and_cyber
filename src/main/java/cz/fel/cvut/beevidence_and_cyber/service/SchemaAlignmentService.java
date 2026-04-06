@@ -17,6 +17,7 @@ public class SchemaAlignmentService implements CommandLineRunner {
     public void run(String... args) {
         alignRemoteSessionHelpRequestColumn();
         alignDeviceLogEntryLogSourceConstraint();
+        alignCommandExecutionResultJsonColumn();
     }
 
     private void alignRemoteSessionHelpRequestColumn() {
@@ -39,6 +40,16 @@ public class SchemaAlignmentService implements CommandLineRunner {
             log.info("Database schema alignment applied: device_log_entry.log_source now allows WINDOWS_SECURITY.");
         } catch (Exception exception) {
             log.warn("Database schema alignment for device_log_entry.log_source could not be applied automatically: {}",
+                    exception.getMessage());
+        }
+    }
+
+    private void alignCommandExecutionResultJsonColumn() {
+        try {
+            jdbcTemplate.execute("alter table command_execution add column if not exists result_json jsonb");
+            log.info("Database schema alignment applied: command_execution.result_json is available.");
+        } catch (Exception exception) {
+            log.warn("Database schema alignment for command_execution.result_json could not be applied automatically: {}",
                     exception.getMessage());
         }
     }
