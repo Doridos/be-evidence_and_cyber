@@ -4,6 +4,7 @@ public enum CommandTypeEnum {
     PRINTER,
     NETWORK_DRIVE,
     SERVICE,
+    PROCESS,
     USB,
     COLLECT
 }

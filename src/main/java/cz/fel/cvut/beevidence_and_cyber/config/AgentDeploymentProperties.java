@@ -15,7 +15,7 @@ public class AgentDeploymentProperties {
     private String packageJarDir = "../agent-evidence_and_cyber/target";
     private String packageRuntimeDir = "../agent-evidence_and_cyber/windows-runtime";
     private String remoteStagingDir = "C:\\Windows\\Temp\\EvidenceAndCyberAgentInstall";
-    private String backendBaseUrl = "http://192.168.68.106:8080";
+    private String backendBaseUrl = "http://192.168.130.61:8080";
     private long packageTokenTtlSeconds = 900;
     private String winrmScheme = "http";
     private int winrmPort = 5985;

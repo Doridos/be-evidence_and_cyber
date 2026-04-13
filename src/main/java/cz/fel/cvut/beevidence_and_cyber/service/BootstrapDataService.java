@@ -133,11 +133,19 @@ public class BootstrapDataService implements CommandLineRunner {
         );
         ensureDetectionRule(
                 "USB_DEVICE_CONNECTED",
-                "Připojení USB zařízení",
-                "Detekuje připojení nebo inicializaci USB zařízení podle systémových PnP událostí.",
+                "Připojení USB mass storage zařízení",
+                "Detekuje připojení nebo inicializaci USB mass storage zařízení podle systémových PnP událostí.",
                 SeverityLevelEnum.MEDIUM,
                 DetectionSourceTypeEnum.LOG,
-                Map.of("kind", "usb_system_event", "eventCodes", List.of("400", "410", "430", "20001"))
+                Map.of("kind", "usb_system_event", "eventCodes", List.of("400", "410", "430", "20001", "20003", "2100", "2101", "2102"))
+        );
+        ensureDetectionRule(
+                "USB_BLOCKED_CONNECTION_ATTEMPT",
+                "Pokus o připojení USB mass storage při blokaci",
+                "Detekuje pokus o připojení USB mass storage zařízení na stroji, kde jsou přenosná USB zařízení blokována politikou.",
+                SeverityLevelEnum.HIGH,
+                DetectionSourceTypeEnum.LOG,
+                Map.of("kind", "usb_blocked_attempt", "eventCodes", List.of("400", "410", "430", "20001", "20003", "2100", "2101", "2102"))
         );
         ensureDetectionRule(
                 "HOSTS_FILE_CHANGED",
@@ -163,7 +171,36 @@ public class BootstrapDataService implements CommandLineRunner {
                                      SeverityLevelEnum severity,
                                      DetectionSourceTypeEnum sourceType,
                                      Map<String, Object> conditionJson) {
-        detectionRuleRepository.findByCodeIgnoreCase(code).orElseGet(() -> {
+        detectionRuleRepository.findByCodeIgnoreCase(code).ifPresentOrElse(existing -> {
+            boolean changed = false;
+            if (!code.equals(existing.getCode())) {
+                existing.setCode(code);
+                changed = true;
+            }
+            if (!name.equals(existing.getName())) {
+                existing.setName(name);
+                changed = true;
+            }
+            if (!description.equals(existing.getDescription())) {
+                existing.setDescription(description);
+                changed = true;
+            }
+            if (existing.getSeverity() != severity) {
+                existing.setSeverity(severity);
+                changed = true;
+            }
+            if (existing.getSourceType() != sourceType) {
+                existing.setSourceType(sourceType);
+                changed = true;
+            }
+            if (!conditionJson.equals(existing.getConditionJson())) {
+                existing.setConditionJson(conditionJson);
+                changed = true;
+            }
+            if (changed) {
+                detectionRuleRepository.save(existing);
+            }
+        }, () -> {
             DetectionRule rule = new DetectionRule();
             rule.setCode(code);
             rule.setName(name);
@@ -172,7 +209,7 @@ public class BootstrapDataService implements CommandLineRunner {
             rule.setSourceType(sourceType);
             rule.setConditionJson(conditionJson);
             rule.setEnabled(true);
-            return detectionRuleRepository.save(rule);
+            detectionRuleRepository.save(rule);
         });
     }
 }

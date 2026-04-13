@@ -173,6 +173,23 @@ public class AgentIngestionService {
         } else {
             commandRequest.setStatus(CommandStatusEnum.RUNNING);
         }
+
+        if (request.exitCode() != null
+                && request.exitCode() == 0
+                && commandRequest.getCommandType() == CommandTypeEnum.USB
+                && commandRequest.getDevice() != null) {
+            String mode = null;
+            if (request.resultJson() != null && request.resultJson().get("mode") instanceof String resultMode) {
+                mode = resultMode;
+            } else if (commandRequest.getPayloadJson() != null && commandRequest.getPayloadJson().get("mode") instanceof String payloadMode) {
+                mode = payloadMode;
+            }
+            if (mode != null) {
+                commandRequest.getDevice().setUsbRemovableBlocked("BLOCK".equalsIgnoreCase(mode));
+                endpointDeviceRepository.save(commandRequest.getDevice());
+            }
+        }
+
         commandRequestRepository.save(commandRequest);
 
         CommandExecution saved = commandExecutionRepository.save(execution);

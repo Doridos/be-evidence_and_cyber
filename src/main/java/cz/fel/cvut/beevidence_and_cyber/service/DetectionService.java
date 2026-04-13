@@ -2,6 +2,7 @@ package cz.fel.cvut.beevidence_and_cyber.service;
 
 import cz.fel.cvut.beevidence_and_cyber.dao.AIAnalysisRun;
 import cz.fel.cvut.beevidence_and_cyber.dao.DetectionFinding;
+import cz.fel.cvut.beevidence_and_cyber.dao.DetectionFindingEvent;
 import cz.fel.cvut.beevidence_and_cyber.dao.DetectionRule;
 import cz.fel.cvut.beevidence_and_cyber.dao.DeviceLogEntry;
 import cz.fel.cvut.beevidence_and_cyber.dao.DeviceSnapshot;
@@ -12,16 +13,19 @@ import cz.fel.cvut.beevidence_and_cyber.dao.User;
 import cz.fel.cvut.beevidence_and_cyber.dto.AIAnalysisRunDto;
 import cz.fel.cvut.beevidence_and_cyber.dto.AIAnalysisRunRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DetectionFindingDto;
+import cz.fel.cvut.beevidence_and_cyber.dto.DetectionFindingEventDto;
 import cz.fel.cvut.beevidence_and_cyber.dto.DetectionFindingStatusRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DetectionRuleDto;
 import cz.fel.cvut.beevidence_and_cyber.dto.DetectionRuleRequest;
 import cz.fel.cvut.beevidence_and_cyber.enumeration.ActorSourceEnum;
 import cz.fel.cvut.beevidence_and_cyber.enumeration.AuditResultEnum;
 import cz.fel.cvut.beevidence_and_cyber.enumeration.DetectionSourceTypeEnum;
+import cz.fel.cvut.beevidence_and_cyber.enumeration.DetectionFindingEventTypeEnum;
 import cz.fel.cvut.beevidence_and_cyber.enumeration.FindingStatusEnum;
 import cz.fel.cvut.beevidence_and_cyber.enumeration.SeverityLevelEnum;
 import cz.fel.cvut.beevidence_and_cyber.exception.NotFoundException;
 import cz.fel.cvut.beevidence_and_cyber.repository.AIAnalysisRunRepository;
+import cz.fel.cvut.beevidence_and_cyber.repository.DetectionFindingEventRepository;
 import cz.fel.cvut.beevidence_and_cyber.repository.DetectionFindingRepository;
 import cz.fel.cvut.beevidence_and_cyber.repository.DetectionRuleRepository;
 import cz.fel.cvut.beevidence_and_cyber.repository.DeviceLogEntryRepository;
@@ -41,8 +45,6 @@ import java.io.StringReader;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -57,12 +59,12 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class DetectionService {
 
-    private static final Duration FINDING_MERGE_WINDOW = Duration.ofHours(12);
     private static final Duration FINDING_CONTEXT_WINDOW = Duration.ofMinutes(10);
-    private static final int CONTEXT_ITEM_LIMIT = 20;
+    private static final int CONTEXT_ITEM_LIMIT = 500;
 
     private final DetectionRuleRepository detectionRuleRepository;
     private final DetectionFindingRepository detectionFindingRepository;
+    private final DetectionFindingEventRepository detectionFindingEventRepository;
     private final AIAnalysisRunRepository aiAnalysisRunRepository;
     private final DeviceLogEntryRepository deviceLogEntryRepository;
     private final FileSystemEventRepository fileSystemEventRepository;
@@ -100,12 +102,16 @@ public class DetectionService {
     public List<DetectionFindingDto> getAllFindings() {
         return detectionFindingRepository.findAll().stream()
                 .sorted(Comparator.comparing(DetectionFinding::getLastSeenAt, Comparator.nullsLast(Comparator.reverseOrder())))
-                .map(apiMapper::toDto)
+                .map(finding -> apiMapper.toDto(finding, List.of()))
                 .toList();
     }
 
     public DetectionFindingDto getFinding(UUID id) {
-        return apiMapper.toDto(findFinding(id));
+        DetectionFinding finding = findFinding(id);
+        List<DetectionFindingEventDto> events = detectionFindingEventRepository.findByFindingOrderByOccurredAtAscIdAsc(finding).stream()
+                .map(apiMapper::toDto)
+                .toList();
+        return apiMapper.toDto(finding, events);
     }
 
     @Transactional
@@ -240,6 +246,9 @@ public class DetectionService {
 
         for (FileSystemEvent event : fileEvents) {
             String normalizedPath = normalizePath(event.getPath());
+            if (isBenignSystemTaskPath(normalizedPath)) {
+                continue;
+            }
             boolean specificMatched = false;
 
             if (taskRule != null && isTaskPath(normalizedPath)) {
@@ -303,10 +312,16 @@ public class DetectionService {
         DetectionRule rdpRule = findEnabledRule("RDP_LOGON").orElse(null);
         DetectionRule serviceRule = findEnabledRule("SERVICE_INSTALLED").orElse(null);
         DetectionRule usbConnectedRule = findEnabledRule("USB_DEVICE_CONNECTED").orElse(null);
+        DetectionRule usbBlockedAttemptRule = findEnabledRule("USB_BLOCKED_CONNECTION_ATTEMPT").orElse(null);
 
         for (DeviceLogEntry logEntry : logEntries) {
             String eventCode = safeValue(logEntry.getEventCode());
             Map<String, String> parsedPayload = parseEventXml(logEntry.getRawPayload());
+
+            if ("POWERSHELL".equalsIgnoreCase(safeValue(logEntry.getLogSource() == null ? null : logEntry.getLogSource().name()))
+                    && ("400".equals(eventCode) || "40961".equals(eventCode) || "4103".equals(eventCode) || "4104".equals(eventCode))) {
+                continue;
+            }
 
             if (localUserRule != null && "4720".equals(eventCode)) {
                 createOrRefreshFinding(
@@ -356,14 +371,26 @@ public class DetectionService {
             }
 
             if (usbConnectedRule != null && isUsbConnectionEvent(logEntry, parsedPayload)) {
-                createOrRefreshFinding(
-                        device,
-                        usbConnectedRule,
-                        "Připojeno USB zařízení",
-                        "Bylo zaznamenáno připojení USB zařízení " + detailSuffix(describeUsbDevice(logEntry, parsedPayload)).replaceFirst("^ \\| ", ""),
-                        logEntry.getOccurredAt(),
-                        buildLogContext(device, logEntry, parsedPayload)
-                );
+                String usbDevice = describeUsbDevice(logEntry, parsedPayload);
+                if (device.isUsbRemovableBlocked() && usbBlockedAttemptRule != null) {
+                    createOrRefreshFinding(
+                            device,
+                            usbBlockedAttemptRule,
+                            "Pokus o připojení blokovaného USB zařízení",
+                            "Byl zaznamenán pokus o připojení USB zařízení na stanici s aktivní blokací USB: " + usbDevice,
+                            logEntry.getOccurredAt(),
+                            buildLogContext(device, logEntry, parsedPayload)
+                    );
+                } else {
+                    createOrRefreshFinding(
+                            device,
+                            usbConnectedRule,
+                            "Připojeno USB zařízení",
+                            "Bylo zaznamenáno připojení USB zařízení: " + usbDevice,
+                            logEntry.getOccurredAt(),
+                            buildLogContext(device, logEntry, parsedPayload)
+                    );
+                }
             }
 
             if (powershellRule != null && isElevatedPowerShell(device, logEntry, parsedPayload)) {
@@ -371,7 +398,7 @@ public class DetectionService {
                         device,
                         powershellRule,
                         "Spuštění PowerShellu s elevovanými právy",
-                        logEntry.getMessage(),
+                        buildPowerShellFindingDescription(logEntry, parsedPayload),
                         logEntry.getOccurredAt(),
                         buildLogContext(device, logEntry, parsedPayload)
                 );
@@ -419,49 +446,144 @@ public class DetectionService {
 
     private boolean isElevatedPowerShell(EndpointDevice device, DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
         String eventCode = safeValue(logEntry.getEventCode());
-        if ("4688".equals(eventCode)) {
-            String processName = normalizePath(firstNonBlank(parsedPayload.get("NewProcessName"), parsedPayload.get("ProcessName")));
-            if (!(processName.endsWith("\\powershell.exe") || processName.endsWith("\\pwsh.exe"))) {
-                return false;
-            }
-            String tokenElevation = safeValue(parsedPayload.get("TokenElevationType"));
-            return !tokenElevation.equals("-") && !tokenElevation.equals("%%1938");
+        if (!"4688".equals(eventCode)) {
+            return false;
         }
 
-        if ("4103".equals(eventCode) || "4104".equals(eventCode)) {
-            String rawPayload = safeValue(logEntry.getRawPayload()).toLowerCase(Locale.ROOT);
-            return rawPayload.contains("powershell") || rawPayload.contains("pwsh");
+        String processName = normalizePath(firstNonBlank(parsedPayload.get("NewProcessName"), parsedPayload.get("ProcessName")));
+        if (!isPowerShellExecutable(processName)) {
+            return false;
         }
 
-        if ("400".equals(eventCode) || "40961".equals(eventCode)) {
-            String rawPayload = safeValue(logEntry.getRawPayload()).toLowerCase(Locale.ROOT);
-            return rawPayload.contains("powershell")
-                    && (hasPrivilegedSecurityContext(rawPayload) || hasRecentPrivilegedLogon(device, logEntry.getOccurredAt()));
+        String tokenElevation = safeValue(parsedPayload.get("TokenElevationType"));
+        if (!isElevatedToken(tokenElevation)) {
+            return false;
         }
 
-        return false;
+        String subjectUser = userLabel(parsedPayload, "SubjectDomainName", "SubjectUserName");
+        return !"-".equals(subjectUser) && !isBuiltinSecurityPrincipal(subjectUser);
+    }
+
+    private boolean isPowerShellExecutable(String processName) {
+        return processName.endsWith("\\powershell.exe") || processName.endsWith("\\pwsh.exe");
+    }
+
+    private boolean isElevatedToken(String tokenElevation) {
+        if (tokenElevation == null || tokenElevation.isBlank() || tokenElevation.equals("-")) {
+            return false;
+        }
+        String normalized = tokenElevation.toLowerCase(Locale.ROOT);
+        return !normalized.contains("1938");
+    }
+
+    private boolean isBuiltinSecurityPrincipal(String userLabel) {
+        if (userLabel == null) {
+            return true;
+        }
+        String normalized = userLabel.toLowerCase(Locale.ROOT);
+        return normalized.contains("system")
+                || normalized.contains("localservice")
+                || normalized.contains("networkservice")
+                || normalized.endsWith("\\-")
+                || normalized.equals("-");
     }
 
     private boolean isUsbConnectionEvent(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
         String eventCode = safeValue(logEntry.getEventCode());
-        if (!List.of("400", "410", "430", "20001").contains(eventCode)) {
-            return false;
-        }
         String rawPayload = safeValue(logEntry.getRawPayload()).toLowerCase(Locale.ROOT);
-        String provider = safeValue(logEntry.getMessage()).toLowerCase(Locale.ROOT);
+        String provider = safeValue(parsedPayload.get("ProviderName")).toLowerCase(Locale.ROOT);
+        String channel = safeValue(parsedPayload.get("Channel")).toLowerCase(Locale.ROOT);
+        String classGuid = safeValue(parsedPayload.get("ClassGuid")).toLowerCase(Locale.ROOT);
+        String className = safeValue(parsedPayload.get("ClassName")).toLowerCase(Locale.ROOT);
+        String serviceName = safeValue(parsedPayload.get("ServiceName")).toLowerCase(Locale.ROOT);
+        String infName = safeValue(parsedPayload.get("InfName")).toLowerCase(Locale.ROOT);
         String candidate = firstNonBlank(
                 parsedPayload.get("DeviceInstanceId"),
                 parsedPayload.get("InstanceId"),
                 parsedPayload.get("DeviceId"),
                 parsedPayload.get("DeviceName"),
+                parsedPayload.get("FriendlyName"),
+                parsedPayload.get("DeviceDescription"),
                 parsedPayload.get("DriverName"),
                 logEntry.getMessage(),
                 rawPayload
         ).toLowerCase(Locale.ROOT);
-        return candidate.contains("usb")
+        String storageHint = firstNonBlank(
+                parsedPayload.get("DriverName"),
+                serviceName,
+                infName,
+                parsedPayload.get("DeviceInstanceId"),
+                parsedPayload.get("InstanceId"),
+                parsedPayload.get("DeviceId"),
+                rawPayload
+        ).toLowerCase(Locale.ROOT);
+        boolean pnpSignal = List.of("400", "410", "430", "20001", "20003", "2100", "2101", "2102").contains(eventCode)
+                || provider.contains("kernel-pnp")
+                || provider.contains("driverframeworks")
+                || channel.contains("kernel-pnp")
+                || channel.contains("driverframeworks")
+                || parsedPayload.containsKey("DeviceInstanceId")
+                || parsedPayload.containsKey("DeviceId");
+        boolean massStorageIdentity = isUsbMassStorageIdentity(candidate, rawPayload, storageHint, classGuid, className, serviceName, infName);
+
+        return pnpSignal && massStorageIdentity;
+    }
+
+    private boolean isUsbMassStorageIdentity(String candidate,
+                                             String rawPayload,
+                                             String storageHint,
+                                             String classGuid,
+                                             String className,
+                                             String serviceName,
+                                             String infName) {
+        boolean explicitStorageSignature = candidate.contains("usbstor\\")
                 || candidate.contains("usbstor")
-                || provider.contains("usb")
-                || rawPayload.contains("usb");
+                || candidate.contains("uaspstor")
+                || candidate.contains("disk&ven_usb")
+                || candidate.contains("scsi\\disk&ven_usb")
+                || rawPayload.contains("usbstor")
+                || rawPayload.contains("uaspstor")
+                || rawPayload.contains("disk&ven_usb")
+                || rawPayload.contains("scsi\\disk&ven_usb")
+                || storageHint.contains("usbstor")
+                || storageHint.contains("uaspstor")
+                || storageHint.contains("usbstor.inf")
+                || storageHint.contains("uaspstor.inf");
+
+        boolean storageClassGuid = classGuid.contains("53f56307-b6bf-11d0-94f2-00a0c91efb8b")
+                || classGuid.contains("4d36e967-e325-11ce-bfc1-08002be10318")
+                || classGuid.contains("71a27cdd-812a-11d0-bec7-08002be2092f");
+
+        boolean storageClassName = className.contains("diskdrive")
+                || className.contains("volume")
+                || className.contains("mass storage")
+                || className.contains("storage")
+                || className.contains("removable");
+
+        boolean serviceSignature = serviceName.contains("usbstor")
+                || serviceName.contains("uaspstor")
+                || infName.contains("usbstor")
+                || infName.contains("uaspstor");
+
+        boolean nonStorageNoise = candidate.contains("audioendpoint")
+                || candidate.contains("printenum")
+                || candidate.contains("printer")
+                || candidate.contains("hidclass")
+                || candidate.contains("bluetooth")
+                || candidate.contains("bth")
+                || candidate.contains("camera")
+                || candidate.contains("image")
+                || candidate.contains("vide")
+                || candidate.contains("wpd")
+                || rawPayload.contains("audioendpoint")
+                || rawPayload.contains("printenum")
+                || rawPayload.contains("printer")
+                || rawPayload.contains("hidclass")
+                || rawPayload.contains("bluetooth")
+                || rawPayload.contains("camera")
+                || rawPayload.contains("wpd");
+
+        return !nonStorageNoise && (explicitStorageSignature || storageClassGuid || storageClassName || serviceSignature);
     }
 
     private String describeUsbDevice(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
@@ -506,28 +628,196 @@ public class DetectionService {
                                                     LocalDateTime occurredAt,
                                                     Map<String, Object> contextJson) {
         LocalDateTime effectiveTime = occurredAt == null ? LocalDateTime.now() : occurredAt;
-        DetectionFinding existing = detectionFindingRepository.findTop10ByDeviceAndRuleOrderByLastSeenAtDesc(device, rule).stream()
-                .filter(item -> title.equals(item.getTitle()))
-                .filter(item -> item.getStatus() == FindingStatusEnum.OPEN || item.getStatus() == FindingStatusEnum.ACKNOWLEDGED)
-                .filter(item -> item.getLastSeenAt() != null && !item.getLastSeenAt().isBefore(effectiveTime.minus(FINDING_MERGE_WINDOW)))
-                .findFirst()
-                .orElse(null);
+        DetectionFinding finding = findMergeCandidate(device, rule, effectiveTime).orElseGet(DetectionFinding::new);
+        LocalDateTime firstSeenAt = finding.getFirstSeenAt() == null || effectiveTime.isBefore(finding.getFirstSeenAt())
+                ? effectiveTime
+                : finding.getFirstSeenAt();
+        LocalDateTime lastSeenAt = finding.getLastSeenAt() == null || effectiveTime.isAfter(finding.getLastSeenAt())
+                ? effectiveTime
+                : finding.getLastSeenAt();
 
-        DetectionFinding finding = existing == null ? new DetectionFinding() : existing;
         finding.setDevice(device);
         finding.setRule(rule);
         finding.setSeverity(rule.getSeverity());
         finding.setTitle(title);
         finding.setDescription(description);
-        finding.setLastSeenAt(effectiveTime);
-        finding.setContextJson(contextJson);
-        finding.setCreatedByAi(false);
-        if (existing == null) {
+        if (finding.getStatus() == null || finding.getStatus() == FindingStatusEnum.RESOLVED) {
             finding.setStatus(FindingStatusEnum.OPEN);
-            finding.setFirstSeenAt(effectiveTime);
+        }
+        finding.setFirstSeenAt(firstSeenAt);
+        finding.setLastSeenAt(lastSeenAt);
+        finding.setContextJson(buildAggregatedFindingContext(device, finding, finding.getContextJson(), contextJson, firstSeenAt, lastSeenAt));
+        finding.setCreatedByAi(false);
+        DetectionFinding savedFinding = detectionFindingRepository.save(finding);
+        persistFindingEvent(savedFinding, contextJson);
+        return savedFinding;
+    }
+
+    private Optional<DetectionFinding> findMergeCandidate(EndpointDevice device,
+                                                          DetectionRule rule,
+                                                          LocalDateTime occurredAt) {
+        return detectionFindingRepository.findTop10ByDeviceAndRuleOrderByLastSeenAtDesc(device, rule).stream()
+                .filter(candidate -> candidate.getStatus() != FindingStatusEnum.FALSE_POSITIVE)
+                .filter(candidate -> candidate.getStatus() != FindingStatusEnum.RESOLVED)
+                .filter(candidate -> isWithinMergeWindow(candidate, occurredAt))
+                .findFirst();
+    }
+
+    private boolean isWithinMergeWindow(DetectionFinding candidate, LocalDateTime occurredAt) {
+        if (occurredAt == null) {
+            return false;
+        }
+        LocalDateTime candidateFrom = candidate.getFirstSeenAt() == null ? candidate.getLastSeenAt() : candidate.getFirstSeenAt();
+        LocalDateTime candidateTo = candidate.getLastSeenAt() == null ? candidate.getFirstSeenAt() : candidate.getLastSeenAt();
+        if (candidateFrom == null || candidateTo == null) {
+            return false;
+        }
+        return !occurredAt.isBefore(candidateFrom.minus(FINDING_CONTEXT_WINDOW))
+                && !occurredAt.isAfter(candidateTo.plus(FINDING_CONTEXT_WINDOW));
+    }
+
+    private Map<String, Object> buildAggregatedFindingContext(EndpointDevice device,
+                                                              DetectionFinding finding,
+                                                              Map<String, Object> existingContext,
+                                                              Map<String, Object> newContext,
+                                                              LocalDateTime firstSeenAt,
+                                                              LocalDateTime lastSeenAt) {
+        Map<String, Object> aggregatedContext = new LinkedHashMap<>();
+
+        Map<String, Object> deviceContext = firstNonEmptyMap(readMap(newContext, "device"), readMap(existingContext, "device"));
+        if (!deviceContext.isEmpty()) {
+            aggregatedContext.put("device", deviceContext);
         }
 
-        return detectionFindingRepository.save(finding);
+        Map<String, Object> latestTrigger = firstNonEmptyMap(readMap(newContext, "trigger"), readMap(existingContext, "trigger"));
+        if (!latestTrigger.isEmpty()) {
+            aggregatedContext.put("trigger", latestTrigger);
+        }
+
+        Map<String, Object> timeWindow = new LinkedHashMap<>();
+        timeWindow.put("from", firstSeenAt);
+        timeWindow.put("to", lastSeenAt);
+        aggregatedContext.put("timeWindow", timeWindow);
+
+        List<DeviceLogEntry> relatedLogs = deviceLogEntryRepository.findByDeviceAndOccurredAtBetweenOrderByOccurredAtAsc(device, firstSeenAt, lastSeenAt);
+        List<FileSystemEvent> relatedFileEvents = fileSystemEventRepository.findByDeviceAndOccurredAtBetweenOrderByOccurredAtAsc(device, firstSeenAt, lastSeenAt);
+        aggregatedContext.put("relatedLogs", relatedLogs.stream().limit(CONTEXT_ITEM_LIMIT).map(this::toLogContext).toList());
+        aggregatedContext.put("relatedFileEvents", relatedFileEvents.stream().limit(CONTEXT_ITEM_LIMIT).map(this::toFileEventContext).toList());
+        long triggerCount = countFindingEvents(finding);
+        if (!latestTrigger.isEmpty()) {
+            triggerCount += 1;
+        }
+        aggregatedContext.put("triggerCount", triggerCount);
+
+        Map<String, Object> previousSnapshot = firstNonEmptyMap(readMap(newContext, "previousSnapshot"), readMap(existingContext, "previousSnapshot"));
+        if (!previousSnapshot.isEmpty()) {
+            aggregatedContext.put("previousSnapshot", previousSnapshot);
+        }
+
+        Map<String, Object> currentSnapshot = firstNonEmptyMap(readMap(newContext, "currentSnapshot"), readMap(existingContext, "currentSnapshot"));
+        if (!currentSnapshot.isEmpty()) {
+            aggregatedContext.put("currentSnapshot", currentSnapshot);
+        }
+
+        return aggregatedContext;
+    }
+
+    private Map<String, Object> readMap(Map<String, Object> source, String key) {
+        if (source == null) {
+            return Map.of();
+        }
+        Object value = source.get(key);
+        if (value instanceof Map<?, ?> mapValue) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : mapValue.entrySet()) {
+                if (entry.getKey() != null) {
+                    result.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+            return result;
+        }
+        return Map.of();
+    }
+
+    private Map<String, Object> firstNonEmptyMap(Map<String, Object> preferred, Map<String, Object> fallback) {
+        if (preferred != null && !preferred.isEmpty()) {
+            return preferred;
+        }
+        return fallback == null ? Map.of() : fallback;
+    }
+
+    private void persistFindingEvent(DetectionFinding finding, Map<String, Object> contextJson) {
+        Map<String, Object> trigger = readMap(contextJson, "trigger");
+        if (trigger.isEmpty()) {
+            return;
+        }
+
+        UUID sourceRecordId = parseUuid(trigger.get("sourceRecordId"));
+        if (sourceRecordId != null && detectionFindingEventRepository.existsByFindingAndSourceRecordId(finding, sourceRecordId)) {
+            return;
+        }
+
+        DetectionFindingEvent event = new DetectionFindingEvent();
+        event.setFinding(finding);
+        event.setEventType(parseEventType(trigger.get("type")));
+        event.setOccurredAt(parseLocalDateTime(trigger.get("occurredAt")));
+        event.setSourceRecordId(sourceRecordId);
+        event.setSourceLog(asString(trigger.get("logSource")));
+        event.setLevel(asString(trigger.get("level")));
+        event.setEventCode(asString(trigger.get("eventCode")));
+        event.setMessage(asString(trigger.get("message")));
+        event.setPath(asString(trigger.get("path")));
+        event.setActorUsername(asString(trigger.get("actorUsername")));
+        event.setPayloadJson(new LinkedHashMap<>(trigger));
+        detectionFindingEventRepository.save(event);
+    }
+
+    private DetectionFindingEventTypeEnum parseEventType(Object value) {
+        try {
+            return DetectionFindingEventTypeEnum.valueOf(String.valueOf(value).toUpperCase(Locale.ROOT));
+        } catch (Exception exception) {
+            return DetectionFindingEventTypeEnum.LOG;
+        }
+    }
+
+    private UUID parseUuid(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return UUID.fromString(String.valueOf(value));
+        } catch (Exception exception) {
+            return null;
+        }
+    }
+
+    private LocalDateTime parseLocalDateTime(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof LocalDateTime localDateTime) {
+            return localDateTime;
+        }
+        try {
+            return LocalDateTime.parse(String.valueOf(value));
+        } catch (Exception exception) {
+            return null;
+        }
+    }
+
+    private String asString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = String.valueOf(value);
+        return normalized.isBlank() ? null : normalized;
+    }
+
+    private long countFindingEvents(DetectionFinding finding) {
+        if (finding == null || finding.getId() == null) {
+            return 0;
+        }
+        return detectionFindingEventRepository.findByFindingOrderByOccurredAtAscIdAsc(finding).size();
     }
 
     private Map<String, Object> buildLogContext(EndpointDevice device,
@@ -545,10 +835,26 @@ public class DetectionService {
         Map<String, Object> trigger = new LinkedHashMap<>();
         trigger.put("type", "LOG");
         trigger.put("occurredAt", triggerEntry.getOccurredAt());
+        trigger.put("sourceRecordId", triggerEntry.getId());
         trigger.put("logSource", triggerEntry.getLogSource() == null ? null : triggerEntry.getLogSource().name());
         trigger.put("eventCode", triggerEntry.getEventCode());
         trigger.put("level", triggerEntry.getLevel());
         trigger.put("message", triggerEntry.getMessage());
+        trigger.put("user", deriveLogUserLabel(parsedPayload));
+        trigger.put("processName", firstNonBlank(
+                parsedPayload.get("NewProcessName"),
+                parsedPayload.get("ProcessName"),
+                parsedPayload.get("HostApplication"),
+                parsedPayload.get("CommandInvocation")
+        ));
+        trigger.put("parentProcessName", firstNonBlank(
+                parsedPayload.get("CreatorProcessName"),
+                parsedPayload.get("ParentProcessName")
+        ));
+        trigger.put("commandLine", parsedPayload.get("CommandLine"));
+        trigger.put("hostApplication", parsedPayload.get("HostApplication"));
+        trigger.put("tokenElevationType", parsedPayload.get("TokenElevationType"));
+        trigger.put("activityId", parsedPayload.get("ActivityId"));
         trigger.put("parsedPayload", parsedPayload);
         context.put("trigger", trigger);
         Map<String, Object> timeWindow = new LinkedHashMap<>();
@@ -558,6 +864,64 @@ public class DetectionService {
         context.put("relatedLogs", relatedLogs.stream().limit(CONTEXT_ITEM_LIMIT).map(this::toLogContext).toList());
         context.put("relatedFileEvents", relatedFileEvents.stream().limit(CONTEXT_ITEM_LIMIT).map(this::toFileEventContext).toList());
         return context;
+    }
+
+    private String buildPowerShellFindingDescription(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
+        String eventCode = safeValue(logEntry.getEventCode());
+        String user = deriveLogUserLabel(parsedPayload);
+        String processName = firstNonBlank(parsedPayload.get("NewProcessName"), parsedPayload.get("ProcessName"), parsedPayload.get("HostApplication"));
+        String parentProcess = firstNonBlank(parsedPayload.get("CreatorProcessName"), parsedPayload.get("ParentProcessName"));
+        String commandLine = firstNonBlank(parsedPayload.get("CommandLine"), parsedPayload.get("CommandInvocation"), parsedPayload.get("Payload"));
+        String tokenElevation = safeValue(parsedPayload.get("TokenElevationType"));
+        String pid = firstNonBlank(parsedPayload.get("ProcessId"), parsedPayload.get("PID"), parsedPayload.get("ThreadId"));
+        String activityId = safeValue(parsedPayload.get("ActivityId"));
+
+        return switch (eventCode) {
+            case "4688" -> "PowerShell spuštěn uživatelem " + user +
+                    detailSuffix("proces " + shorten(processName, 180)) +
+                    detailSuffix("parent " + shorten(parentProcess, 140)) +
+                    detailSuffix("elevation " + tokenElevation) +
+                    detailSuffix("cmd " + shorten(commandLine, 220));
+            case "4104" -> "PowerShell script block uživatele " + user +
+                    detailSuffix("cmd " + shorten(commandLine, 220)) +
+                    detailSuffix("activity " + activityId);
+            case "4103" -> "PowerShell command invocation uživatele " + user +
+                    detailSuffix("cmd " + shorten(commandLine, 220)) +
+                    detailSuffix("activity " + activityId);
+            case "400", "40961" -> "PowerShell engine start v kontextu " + user +
+                    detailSuffix("pid " + pid) +
+                    detailSuffix("elevation " + tokenElevation) +
+                    detailSuffix("host " + shorten(firstNonBlank(parsedPayload.get("HostApplication"), parsedPayload.get("EngineVersion")), 180));
+            default -> logEntry.getMessage() +
+                    detailSuffix("uživatel " + user) +
+                    detailSuffix("proces " + shorten(processName, 180));
+        };
+    }
+
+    private String deriveLogUserLabel(Map<String, String> parsedPayload) {
+        String subjectUser = userLabel(parsedPayload, "SubjectDomainName", "SubjectUserName");
+        if (!"-".equals(subjectUser)) {
+            return subjectUser;
+        }
+        String targetUser = userLabel(parsedPayload, "TargetDomainName", "TargetUserName");
+        if (!"-".equals(targetUser)) {
+            return targetUser;
+        }
+        String userId = safeValue(parsedPayload.get("UserId"));
+        if (userId.equals("-")) {
+            return "-";
+        }
+        return friendlySecurityPrincipal(userId);
+    }
+
+    private String friendlySecurityPrincipal(String sid) {
+        String normalized = safeValue(sid).toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "S-1-5-18" -> "SYSTEM (" + sid + ")";
+            case "S-1-5-19" -> "LocalService (" + sid + ")";
+            case "S-1-5-20" -> "NetworkService (" + sid + ")";
+            default -> sid;
+        };
     }
 
     private Map<String, Object> buildFileEventContext(EndpointDevice device, FileSystemEvent triggerEvent) {
@@ -573,6 +937,7 @@ public class DetectionService {
         Map<String, Object> trigger = new LinkedHashMap<>();
         trigger.put("type", "FILE");
         trigger.put("occurredAt", triggerEvent.getOccurredAt());
+        trigger.put("sourceRecordId", triggerEvent.getId());
         trigger.put("eventType", triggerEvent.getEventType() == null ? null : triggerEvent.getEventType().name());
         trigger.put("path", triggerEvent.getPath());
         trigger.put("actorUsername", triggerEvent.getActorUsername());
@@ -604,6 +969,7 @@ public class DetectionService {
         Map<String, Object> trigger = new LinkedHashMap<>();
         trigger.put("type", "SNAPSHOT");
         trigger.put("occurredAt", currentSnapshot.getCollectedAt());
+        trigger.put("sourceRecordId", currentSnapshot.getId());
         trigger.put("previousSnapshotVersion", previousSnapshot.getVersionNo());
         trigger.put("currentSnapshotVersion", currentSnapshot.getVersionNo());
         trigger.put("addedNetworkInterfaces", addedInterfaces);
@@ -627,6 +993,7 @@ public class DetectionService {
         Map<String, Object> trigger = new LinkedHashMap<>();
         trigger.put("type", "SNAPSHOT");
         trigger.put("occurredAt", currentSnapshot.getCollectedAt());
+        trigger.put("sourceRecordId", currentSnapshot.getId());
         trigger.put("previousSnapshotVersion", previousSnapshot.getVersionNo());
         trigger.put("currentSnapshotVersion", currentSnapshot.getVersionNo());
         trigger.put("previousOperatingSystem", describeOperatingSystem(previousSnapshot));
@@ -646,6 +1013,7 @@ public class DetectionService {
         summary.put("primaryIp", device.getPrimaryIp());
         summary.put("status", device.getStatus() == null ? null : device.getStatus().name());
         summary.put("agentInstalled", device.isAgentInstalled());
+        summary.put("usbRemovableBlocked", device.isUsbRemovableBlocked());
         if (snapshot != null) {
             summary.put("snapshot", buildSnapshotSummary(snapshot));
         }
@@ -824,6 +1192,11 @@ public class DetectionService {
                 || normalizedPath.endsWith("\\windows\\tasks");
     }
 
+    private boolean isBenignSystemTaskPath(String normalizedPath) {
+        return normalizedPath.contains("\\windows\\system32\\tasks\\microsoft\\windows\\")
+                || normalizedPath.contains("\\windows\\tasks\\microsoft\\windows\\");
+    }
+
     private String userLabel(Map<String, String> payload, String domainKey, String userKey) {
         String user = safeValue(payload.get(userKey));
         String domain = safeValue(payload.get(domainKey));
@@ -853,6 +1226,14 @@ public class DetectionService {
             }
         }
         return "-";
+    }
+
+    private String shorten(String value, int maxLength) {
+        String safe = safeValue(value);
+        if (safe.length() <= maxLength) {
+            return safe;
+        }
+        return safe.substring(0, Math.max(0, maxLength - 3)) + "...";
     }
 
     private String safeValue(String value) {

@@ -2,6 +2,7 @@ package cz.fel.cvut.beevidence_and_cyber.controller;
 
 import cz.fel.cvut.beevidence_and_cyber.dto.AgentDeploymentRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceCreateRequest;
+import cz.fel.cvut.beevidence_and_cyber.dto.DeviceOwnerCreateRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceSubnetScanRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceUpdateRequest;
 import cz.fel.cvut.beevidence_and_cyber.service.CommandService;
@@ -28,6 +29,18 @@ public class DeviceController {
     @PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
     public List<?> getAllDevices() {
         return deviceService.getAllDevices();
+    }
+
+    @GetMapping("/owners")
+    @PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
+    public List<?> getKnownOwners() {
+        return deviceService.getKnownOwners();
+    }
+
+    @PostMapping("/owners")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Object createOwner(@Valid @RequestBody DeviceOwnerCreateRequest request) {
+        return deviceService.createOwner(request, currentUserService.requireCurrentUser());
     }
 
     @GetMapping("/{id}")

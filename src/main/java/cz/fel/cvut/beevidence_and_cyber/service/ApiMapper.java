@@ -40,6 +40,9 @@ public class ApiMapper {
                                  List<TelemetrySampleDto> telemetrySamples,
                                  List<DeviceLogEntryDto> logEntries,
                                  List<FileSystemEventDto> fileSystemEvents) {
+        DeviceOwner owner = device.getOwner();
+        String ownerFirstName = owner == null ? device.getOwnerFirstName() : owner.getFirstName();
+        String ownerLastName = owner == null ? device.getOwnerLastName() : owner.getLastName();
         return new DeviceDetailDto(
                 device.getId(),
                 device.getAssetTag(),
@@ -47,8 +50,12 @@ public class ApiMapper {
                 device.getFqdn(),
                 device.getPrimaryIp(),
                 device.getSite(),
+                owner == null ? null : owner.getId(),
+                ownerFirstName,
+                ownerLastName,
                 effectiveStatus,
                 device.isAgentInstalled(),
+                device.isUsbRemovableBlocked(),
                 device.getDiscoveredAt(),
                 device.getArchivedAt(),
                 snapshots,
@@ -178,6 +185,10 @@ public class ApiMapper {
     }
 
     public DetectionFindingDto toDto(DetectionFinding detectionFinding) {
+        return toDto(detectionFinding, List.of());
+    }
+
+    public DetectionFindingDto toDto(DetectionFinding detectionFinding, List<DetectionFindingEventDto> events) {
         return new DetectionFindingDto(
                 detectionFinding.getId(),
                 detectionFinding.getDevice().getId(),
@@ -191,7 +202,24 @@ public class ApiMapper {
                 detectionFinding.getFirstSeenAt(),
                 detectionFinding.getLastSeenAt(),
                 detectionFinding.isCreatedByAi(),
-                detectionFinding.getContextJson()
+                detectionFinding.getContextJson(),
+                events
+        );
+    }
+
+    public DetectionFindingEventDto toDto(DetectionFindingEvent event) {
+        return new DetectionFindingEventDto(
+                event.getId(),
+                event.getEventType() == null ? null : event.getEventType().name(),
+                event.getOccurredAt(),
+                event.getSourceRecordId(),
+                event.getSourceLog(),
+                event.getLevel(),
+                event.getEventCode(),
+                event.getMessage(),
+                event.getPath(),
+                event.getActorUsername(),
+                event.getPayloadJson()
         );
     }
 

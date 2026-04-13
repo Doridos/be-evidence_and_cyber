@@ -13,9 +13,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Comparator;
 
 @Service
 @RequiredArgsConstructor
@@ -24,6 +26,7 @@ public class DeviceService {
     private static final Duration HEARTBEAT_INACTIVITY_THRESHOLD = Duration.ofMinutes(5);
 
     private final EndpointDeviceRepository endpointDeviceRepository;
+    private final DeviceOwnerRepository deviceOwnerRepository;
     private final DeviceSnapshotRepository deviceSnapshotRepository;
     private final NetworkInterfaceRepository networkInterfaceRepository;
     private final LoggedInSessionRepository loggedInSessionRepository;
@@ -54,6 +57,37 @@ public class DeviceService {
                 .orElseThrow(() -> new NotFoundException("Device with hostname " + hostname + " not found"));
     }
 
+    public List<DeviceOwnerOptionDto> getKnownOwners() {
+        return deviceOwnerRepository.findAll().stream()
+                .sorted(Comparator.comparing(DeviceOwner::getLastName, String.CASE_INSENSITIVE_ORDER)
+                        .thenComparing(DeviceOwner::getFirstName, String.CASE_INSENSITIVE_ORDER))
+                .map(owner -> new DeviceOwnerOptionDto(owner.getId(), owner.getFirstName(), owner.getLastName(),
+                        owner.getFirstName() + " " + owner.getLastName()))
+                .toList();
+    }
+
+    @Transactional
+    public DeviceOwnerOptionDto createOwner(DeviceOwnerCreateRequest request, User actor) {
+        String firstName = normalizeOwnerPart(request.firstName());
+        String lastName = normalizeOwnerPart(request.lastName());
+        if (firstName == null || lastName == null) {
+            throw new IllegalArgumentException("Vlastník musí obsahovat jméno i příjmení.");
+        }
+
+        DeviceOwner owner = deviceOwnerRepository.findByFirstNameIgnoreCaseAndLastNameIgnoreCase(firstName, lastName)
+                .orElseGet(() -> {
+                    DeviceOwner created = new DeviceOwner();
+                    created.setFirstName(firstName);
+                    created.setLastName(lastName);
+                    return deviceOwnerRepository.save(created);
+                });
+
+        auditService.log(actor, ActorSourceEnum.WEB, "CREATE_DEVICE_OWNER", "DEVICE_OWNER", owner.getId(), AuditResultEnum.SUCCESS,
+                Map.of("firstName", owner.getFirstName(), "lastName", owner.getLastName()));
+        return new DeviceOwnerOptionDto(owner.getId(), owner.getFirstName(), owner.getLastName(),
+                owner.getFirstName() + " " + owner.getLastName());
+    }
+
     @Transactional
     public DeviceDetailDto createDevice(DeviceCreateRequest request, User actor) {
         EndpointDevice device = new EndpointDevice();
@@ -62,6 +96,7 @@ public class DeviceService {
         device.setFqdn(request.fqdn());
         device.setPrimaryIp(request.primaryIp());
         device.setSite(request.site());
+        applyOwner(device, request.ownerId());
         device.setAgentInstalled(request.agentInstalled());
         device.setStatus(DeviceStatusEnum.ACTIVE);
         device.setDiscoveredAt(LocalDateTime.now());
@@ -86,6 +121,9 @@ public class DeviceService {
         }
         if (request.site() != null) {
             device.setSite(request.site());
+        }
+        if (request.ownerId() != null || device.getOwner() != null) {
+            applyOwner(device, request.ownerId());
         }
         if (request.agentInstalled() != null) {
             device.setAgentInstalled(request.agentInstalled());
@@ -194,5 +232,27 @@ public class DeviceService {
                         loggedInSessionRepository.findBySnapshot(snapshot)
                 ))
                 .toList();
+    }
+
+    private String normalizeOwnerPart(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isBlank() ? null : trimmed;
+    }
+
+    private void applyOwner(EndpointDevice device, UUID ownerId) {
+        if (ownerId == null) {
+            device.setOwner(null);
+            device.setOwnerFirstName(null);
+            device.setOwnerLastName(null);
+            return;
+        }
+        DeviceOwner owner = deviceOwnerRepository.findById(ownerId)
+                .orElseThrow(() -> new NotFoundException("Owner with id " + ownerId + " not found"));
+        device.setOwner(owner);
+        device.setOwnerFirstName(owner.getFirstName());
+        device.setOwnerLastName(owner.getLastName());
     }
 }
