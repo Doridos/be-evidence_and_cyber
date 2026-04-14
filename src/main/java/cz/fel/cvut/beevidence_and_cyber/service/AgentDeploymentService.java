@@ -154,6 +154,9 @@ public class AgentDeploymentService {
             copyPackageFile(scriptsDir.resolve("install-agent.ps1"), tempPackageDir.resolve("install-agent.ps1"));
             copyPackageFile(scriptsDir.resolve("uninstall-agent.cmd"), tempPackageDir.resolve("uninstall-agent.cmd"));
             copyPackageFile(scriptsDir.resolve("uninstall-agent.ps1"), tempPackageDir.resolve("uninstall-agent.ps1"));
+            copyOptionalPackageFile(scriptsDir.resolve("WinSW-x64.exe"), tempPackageDir.resolve("WinSW-x64.exe"));
+            copyOptionalPackageFile(scriptsDir.resolve("WinSW-arm64.exe"), tempPackageDir.resolve("WinSW-arm64.exe"));
+            copyOptionalPackageFile(scriptsDir.resolve("WinSW.exe"), tempPackageDir.resolve("WinSW.exe"));
 
             Properties properties = loadAndCustomizeProperties(scriptsDir.resolve("agent.properties"));
             Path generatedProperties = tempPackageDir.resolve("agent.properties");
@@ -193,6 +196,14 @@ public class AgentDeploymentService {
     private void copyPackageFile(Path source, Path target) throws IOException {
         if (!Files.exists(source)) {
             throw new BadRequestException("V deployment balíčku chybí požadovaný soubor: " + source);
+        }
+        Files.copy(source, target);
+    }
+
+    private void copyOptionalPackageFile(Path source, Path target) throws IOException {
+        if (!Files.exists(source)) {
+            log.info("Optional deployment file not found, skipping. path={}", source);
+            return;
         }
         Files.copy(source, target);
     }

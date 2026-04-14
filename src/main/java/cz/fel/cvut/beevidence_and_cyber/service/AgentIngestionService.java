@@ -6,6 +6,7 @@ import cz.fel.cvut.beevidence_and_cyber.enumeration.*;
 import cz.fel.cvut.beevidence_and_cyber.exception.NotFoundException;
 import cz.fel.cvut.beevidence_and_cyber.repository.*;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +21,7 @@ import java.util.Locale;
 import java.util.Map;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class AgentIngestionService {
     private static final long LOG_RETENTION_DAYS = 3;
@@ -111,6 +113,12 @@ public class AgentIngestionService {
     public void ingestLogs(AgentLogIngestionRequest request) {
         EndpointDevice device = endpointDeviceRepository.findByHostnameIgnoreCase(request.deviceHostname())
                 .orElseThrow(() -> new NotFoundException("Device with hostname " + request.deviceHostname() + " not found"));
+        log.info(
+                "Agent log ingestion started. deviceHostname={}, incomingLogEntries={}, incomingFileEvents={}",
+                device.getHostname(),
+                request.logEntries() == null ? 0 : request.logEntries().size(),
+                request.fileSystemEvents() == null ? 0 : request.fileSystemEvents().size()
+        );
 
         List<DeviceLogEntry> savedLogEntries = new ArrayList<>();
         if (request.logEntries() != null) {
@@ -142,11 +150,33 @@ public class AgentIngestionService {
             }
         }
 
+        log.info(
+                "Agent log ingestion persisted. deviceHostname={}, savedLogEntries={}, savedFileEvents={}, usbRelatedLogEntries={}",
+                device.getHostname(),
+                savedLogEntries.size(),
+                savedFileEvents.size(),
+                savedLogEntries.stream().filter(this::isUsbRelatedLogEntry).count()
+        );
         detectionService.evaluateCollectedSignals(device, savedLogEntries, savedFileEvents);
         pruneOldCollectedData(device);
 
         auditService.log(null, ActorSourceEnum.AGENT, "INGEST_LOGS", "DEVICE", device.getId(), AuditResultEnum.SUCCESS,
                 Map.of("hostname", device.getHostname()));
+    }
+
+    private boolean isUsbRelatedLogEntry(DeviceLogEntry entry) {
+        if (entry == null) {
+            return false;
+        }
+        String eventCode = entry.getEventCode() == null ? "" : entry.getEventCode().toUpperCase(Locale.ROOT);
+        String message = entry.getMessage() == null ? "" : entry.getMessage().toLowerCase(Locale.ROOT);
+        String rawPayload = entry.getRawPayload() == null ? "" : entry.getRawPayload().toLowerCase(Locale.ROOT);
+        return eventCode.contains("USB")
+                || List.of("400", "410", "420", "430", "20001", "20003", "2100", "2101", "2102").contains(eventCode)
+                || message.contains("usb")
+                || rawPayload.contains("usb")
+                || rawPayload.contains("usbstor")
+                || rawPayload.contains("uaspstor");
     }
 
     @Transactional

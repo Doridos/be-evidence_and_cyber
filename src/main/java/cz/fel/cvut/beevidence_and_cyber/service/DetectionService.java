@@ -33,6 +33,7 @@ import cz.fel.cvut.beevidence_and_cyber.repository.DeviceSnapshotRepository;
 import cz.fel.cvut.beevidence_and_cyber.repository.FileSystemEventRepository;
 import cz.fel.cvut.beevidence_and_cyber.repository.NetworkInterfaceRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.w3c.dom.Document;
@@ -56,10 +57,12 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class DetectionService {
 
     private static final Duration FINDING_CONTEXT_WINDOW = Duration.ofMinutes(10);
+    private static final Duration USB_FINDING_MERGE_WINDOW = Duration.ofMinutes(5);
     private static final int CONTEXT_ITEM_LIMIT = 500;
 
     private final DetectionRuleRepository detectionRuleRepository;
@@ -313,6 +316,29 @@ public class DetectionService {
         DetectionRule serviceRule = findEnabledRule("SERVICE_INSTALLED").orElse(null);
         DetectionRule usbConnectedRule = findEnabledRule("USB_DEVICE_CONNECTED").orElse(null);
         DetectionRule usbBlockedAttemptRule = findEnabledRule("USB_BLOCKED_CONNECTION_ATTEMPT").orElse(null);
+        long processCreateEvents = logEntries.stream()
+                .filter(logEntry -> "4688".equals(safeValue(logEntry.getEventCode())))
+                .count();
+        long powerShellProcessCandidates = logEntries.stream()
+                .filter(logEntry -> isPowerShellProcessCreationLog(logEntry, parseEventXml(logEntry.getRawPayload())))
+                .count();
+        log.info(
+                "Evaluating collected log signals. deviceHostname={}, logEntries={}, processCreateEvents={}, powerShellProcessCandidates={}, usbConnectedRuleEnabled={}, usbBlockedRuleEnabled={}, usbBlockedOnDevice={}",
+                device.getHostname(),
+                logEntries.size(),
+                processCreateEvents,
+                powerShellProcessCandidates,
+                usbConnectedRule != null,
+                usbBlockedAttemptRule != null,
+                device.isUsbRemovableBlocked()
+        );
+        if (powershellRule != null && powerShellProcessCandidates == 0) {
+            log.info(
+                    "No PowerShell process creation candidates found in current batch. deviceHostname={}, logEntries={}",
+                    device.getHostname(),
+                    logEntries.size()
+            );
+        }
 
         for (DeviceLogEntry logEntry : logEntries) {
             String eventCode = safeValue(logEntry.getEventCode());
@@ -370,30 +396,86 @@ public class DetectionService {
                 );
             }
 
-            if (usbConnectedRule != null && isUsbConnectionEvent(logEntry, parsedPayload)) {
+            UsbConnectionAssessment usbAssessment = assessUsbConnectionEvent(logEntry, parsedPayload);
+            if (isUsbCandidateLogEntry(logEntry, parsedPayload)) {
+                log.info(
+                        "USB candidate log evaluated. deviceHostname={}, blocked={}, logSource={}, eventCode={}, accepted={}, storageLikely={}, deviceType={}, reason={}, message={}",
+                        device.getHostname(),
+                        device.isUsbRemovableBlocked(),
+                        logEntry.getLogSource(),
+                        eventCode,
+                        usbAssessment.accepted(),
+                        usbAssessment.storageLikely(),
+                        usbAssessment.deviceType(),
+                        usbAssessment.reason(),
+                        shorten(safeValue(logEntry.getMessage()), 180)
+                );
+            }
+            if ((usbConnectedRule != null || usbBlockedAttemptRule != null) && usbAssessment.accepted()) {
                 String usbDevice = describeUsbDevice(logEntry, parsedPayload);
-                if (device.isUsbRemovableBlocked() && usbBlockedAttemptRule != null) {
-                    createOrRefreshFinding(
-                            device,
-                            usbBlockedAttemptRule,
-                            "Pokus o připojení blokovaného USB zařízení",
-                            "Byl zaznamenán pokus o připojení USB zařízení na stanici s aktivní blokací USB: " + usbDevice,
-                            logEntry.getOccurredAt(),
-                            buildLogContext(device, logEntry, parsedPayload)
+                DetectionRule matchedRule = device.isUsbRemovableBlocked()
+                        ? firstNonNull(usbBlockedAttemptRule, usbConnectedRule)
+                        : firstNonNull(usbConnectedRule, usbBlockedAttemptRule);
+                String matchedRuleCode = matchedRule == null ? "-" : matchedRule.getCode();
+                log.info(
+                        "USB connection event matched. deviceHostname={}, blocked={}, rule={}, eventCode={}, usbDevice={}, usbAssessment={}, message={}",
+                        device.getHostname(),
+                        device.isUsbRemovableBlocked(),
+                        matchedRuleCode,
+                        eventCode,
+                        usbDevice,
+                        buildUsbAssessmentContext(usbAssessment),
+                        shorten(safeValue(logEntry.getMessage()), 180)
+                );
+                if (matchedRule == null) {
+                    log.warn(
+                            "USB candidate accepted but no detection rule is enabled. deviceHostname={}, eventCode={}, message={}",
+                            device.getHostname(),
+                            eventCode,
+                            shorten(safeValue(logEntry.getMessage()), 180)
                     );
-                } else {
+                } else if (device.isUsbRemovableBlocked() && matchedRule == usbBlockedAttemptRule) {
                     createOrRefreshFinding(
                             device,
-                            usbConnectedRule,
-                            "Připojeno USB zařízení",
-                            "Bylo zaznamenáno připojení USB zařízení: " + usbDevice,
+                            matchedRule,
+                            "Pokus o připojení blokovaného USB zařízení",
+                            "Byl zaznamenán pokus o připojení USB zařízení na stanici s aktivní blokací USB: " + usbDevice +
+                                    detailSuffix(usbAssessment.storageLikely()
+                                            ? "předpoklad mass storage"
+                                            : "předpoklad " + usbDeviceTypeLabel(usbAssessment.deviceType())),
                             logEntry.getOccurredAt(),
-                            buildLogContext(device, logEntry, parsedPayload)
+                            buildLogContext(device, logEntry, parsedPayload, usbAssessment)
+                    );
+                } else if (matchedRule != null) {
+                    createOrRefreshFinding(
+                            device,
+                            matchedRule,
+                            "Připojeno USB zařízení",
+                            "Bylo zaznamenáno připojení USB zařízení: " + usbDevice +
+                                    detailSuffix(usbAssessment.storageLikely()
+                                            ? "předpoklad mass storage"
+                                            : "předpoklad " + usbDeviceTypeLabel(usbAssessment.deviceType())),
+                            logEntry.getOccurredAt(),
+                            buildLogContext(device, logEntry, parsedPayload, usbAssessment)
                     );
                 }
             }
 
-            if (powershellRule != null && isElevatedPowerShell(device, logEntry, parsedPayload)) {
+            ElevatedPowerShellAssessment powerShellAssessment = assessElevatedPowerShell(device, logEntry, parsedPayload);
+            if (powershellRule != null && powerShellAssessment.candidate()) {
+                log.info(
+                        "Elevated PowerShell evaluated. deviceHostname={}, eventCode={}, accepted={}, reason={}, processName={}, tokenElevationType={}, user={}, message={}",
+                        device.getHostname(),
+                        eventCode,
+                        powerShellAssessment.accepted(),
+                        powerShellAssessment.reason(),
+                        shorten(powerShellAssessment.processName(), 140),
+                        powerShellAssessment.tokenElevationType(),
+                        powerShellAssessment.userLabel(),
+                        shorten(safeValue(logEntry.getMessage()), 180)
+                );
+            }
+            if (powershellRule != null && powerShellAssessment.accepted()) {
                 createOrRefreshFinding(
                         device,
                         powershellRule,
@@ -444,24 +526,30 @@ public class DetectionService {
         );
     }
 
-    private boolean isElevatedPowerShell(EndpointDevice device, DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
+    private ElevatedPowerShellAssessment assessElevatedPowerShell(EndpointDevice device, DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
         String eventCode = safeValue(logEntry.getEventCode());
         if (!"4688".equals(eventCode)) {
-            return false;
+            return new ElevatedPowerShellAssessment(false, false, "not a process creation event", "-", "-", "-");
         }
 
         String processName = normalizePath(firstNonBlank(parsedPayload.get("NewProcessName"), parsedPayload.get("ProcessName")));
         if (!isPowerShellExecutable(processName)) {
-            return false;
+            return new ElevatedPowerShellAssessment(true, false, "process is not powershell", processName, "-", "-");
         }
 
         String tokenElevation = safeValue(parsedPayload.get("TokenElevationType"));
         if (!isElevatedToken(tokenElevation)) {
-            return false;
+            return new ElevatedPowerShellAssessment(true, false, "token is not elevated", processName, tokenElevation, "-");
         }
 
         String subjectUser = userLabel(parsedPayload, "SubjectDomainName", "SubjectUserName");
-        return !"-".equals(subjectUser) && !isBuiltinSecurityPrincipal(subjectUser);
+        if ("-".equals(subjectUser)) {
+            return new ElevatedPowerShellAssessment(true, false, "subject user missing", processName, tokenElevation, subjectUser);
+        }
+        if (isBuiltinSecurityPrincipal(subjectUser)) {
+            return new ElevatedPowerShellAssessment(true, false, "builtin security principal", processName, tokenElevation, subjectUser);
+        }
+        return new ElevatedPowerShellAssessment(true, true, "powershell process created with elevated token", processName, tokenElevation, subjectUser);
     }
 
     private boolean isPowerShellExecutable(String processName) {
@@ -489,7 +577,23 @@ public class DetectionService {
     }
 
     private boolean isUsbConnectionEvent(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
+        return assessUsbConnectionEvent(logEntry, parsedPayload).accepted();
+    }
+
+    private UsbConnectionAssessment assessUsbConnectionEvent(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
         String eventCode = safeValue(logEntry.getEventCode());
+        String logSource = logEntry.getLogSource() == null ? "" : safeValue(logEntry.getLogSource().name());
+        if ("USB_STORAGE_CONNECTED".equalsIgnoreCase(eventCode)) {
+            log.info(
+                    "USB connection heuristic evaluated. eventCode={}, provider={}, channel={}, matched=true, pnpSignal=true, massStorageIdentity=true, peripheralIdentity=true, deviceType=mass_storage, classGuid=-, className=-, serviceName=-, infName=-, candidate={}, message={}",
+                    eventCode,
+                    "agent",
+                    "agent/snapshot",
+                    shorten(safeValue(logEntry.getMessage()), 160),
+                    shorten(safeValue(logEntry.getMessage()), 180)
+            );
+            return new UsbConnectionAssessment(true, true, "mass_storage", "Agent USB storage snapshot detected");
+        }
         String rawPayload = safeValue(logEntry.getRawPayload()).toLowerCase(Locale.ROOT);
         String provider = safeValue(parsedPayload.get("ProviderName")).toLowerCase(Locale.ROOT);
         String channel = safeValue(parsedPayload.get("Channel")).toLowerCase(Locale.ROOT);
@@ -517,16 +621,66 @@ public class DetectionService {
                 parsedPayload.get("DeviceId"),
                 rawPayload
         ).toLowerCase(Locale.ROOT);
-        boolean pnpSignal = List.of("400", "410", "430", "20001", "20003", "2100", "2101", "2102").contains(eventCode)
+        boolean pnpSignal = "AGENT".equalsIgnoreCase(logSource)
+                || List.of("400", "410", "420", "430", "20001", "20003", "2100", "2101", "2102").contains(eventCode)
                 || provider.contains("kernel-pnp")
                 || provider.contains("driverframeworks")
                 || channel.contains("kernel-pnp")
                 || channel.contains("driverframeworks")
                 || parsedPayload.containsKey("DeviceInstanceId")
                 || parsedPayload.containsKey("DeviceId");
+        boolean usbCandidateSignal = candidate.contains("usb")
+                || candidate.contains("vid_")
+                || candidate.contains("pid_")
+                || candidate.contains("swd\\")
+                || candidate.contains("storage")
+                || candidate.contains("volume")
+                || candidate.contains("disk")
+                || candidate.contains("removable")
+                || rawPayload.contains("usb")
+                || rawPayload.contains("vid_")
+                || rawPayload.contains("pid_")
+                || rawPayload.contains("swd\\")
+                || rawPayload.contains("storage")
+                || rawPayload.contains("volume")
+                || rawPayload.contains("disk")
+                || rawPayload.contains("removable")
+                || rawPayload.contains("driveletters")
+                || rawPayload.contains("volumenames")
+                || rawPayload.contains("\"interfacetype\":\"usb\"")
+                || storageHint.contains("usb")
+                || storageHint.contains("storage")
+                || storageHint.contains("volume")
+                || storageHint.contains("disk")
+                || storageHint.contains("removable")
+                || classGuid.contains("53f56307-b6bf-11d0-94f2-00a0c91efb8b")
+                || classGuid.contains("4d36e967-e325-11ce-bfc1-08002be10318")
+                || classGuid.contains("71a27cdd-812a-11d0-bec7-08002be2092f");
         boolean massStorageIdentity = isUsbMassStorageIdentity(candidate, rawPayload, storageHint, classGuid, className, serviceName, infName);
-
-        return pnpSignal && massStorageIdentity;
+        String deviceType = inferUsbDeviceType(candidate, rawPayload, classGuid, className, serviceName, infName);
+        boolean peripheralIdentity = isUsbPeripheralIdentity(candidate, rawPayload, storageHint, classGuid, className, serviceName, infName, deviceType);
+        boolean matched = pnpSignal && (usbCandidateSignal || massStorageIdentity || peripheralIdentity);
+        if (matched || pnpSignal || usbCandidateSignal || massStorageIdentity || peripheralIdentity) {
+            log.info(
+                    "USB connection heuristic evaluated. eventCode={}, provider={}, channel={}, matched={}, pnpSignal={}, usbCandidateSignal={}, massStorageIdentity={}, peripheralIdentity={}, deviceType={}, classGuid={}, className={}, serviceName={}, infName={}, candidate={}, message={}",
+                    eventCode,
+                    provider,
+                    channel,
+                    matched,
+                    pnpSignal,
+                    usbCandidateSignal,
+                    massStorageIdentity,
+                    peripheralIdentity,
+                    deviceType,
+                    classGuid,
+                    className,
+                    serviceName,
+                    infName,
+                    shorten(candidate, 160),
+                    shorten(safeValue(logEntry.getMessage()), 180)
+            );
+        }
+        return new UsbConnectionAssessment(matched, massStorageIdentity, deviceType, buildUsbAssessmentReason(massStorageIdentity, usbCandidateSignal || peripheralIdentity, deviceType));
     }
 
     private boolean isUsbMassStorageIdentity(String candidate,
@@ -586,6 +740,158 @@ public class DetectionService {
         return !nonStorageNoise && (explicitStorageSignature || storageClassGuid || storageClassName || serviceSignature);
     }
 
+    private boolean isUsbPeripheralIdentity(String candidate,
+                                            String rawPayload,
+                                            String storageHint,
+                                            String classGuid,
+                                            String className,
+                                            String serviceName,
+                                            String infName,
+                                            String deviceType) {
+        boolean explicitUsbSignal = candidate.contains("usb\\")
+                || candidate.contains("usb/")
+                || candidate.contains("usbst")
+                || candidate.contains("uaspstor")
+                || candidate.contains("usbstor")
+                || candidate.contains("disk&ven_usb")
+                || candidate.contains("scsi\\disk&ven_usb")
+                || rawPayload.contains("usb\\vid_")
+                || rawPayload.contains("usbst")
+                || rawPayload.contains("uaspstor")
+                || rawPayload.contains("usbstor")
+                || rawPayload.contains("disk&ven_usb")
+                || rawPayload.contains("scsi\\disk&ven_usb")
+                || rawPayload.contains("c_swdevice.inf")
+                || rawPayload.contains("swd\\scdeviceenum")
+                || storageHint.contains("usb")
+                || storageHint.contains("usbstor")
+                || storageHint.contains("uaspstor")
+                || storageHint.contains("c_swdevice.inf");
+
+        boolean peripheralClassHint = classGuid.contains("53f56307-b6bf-11d0-94f2-00a0c91efb8b")
+                || classGuid.contains("4d36e967-e325-11ce-bfc1-08002be10318")
+                || classGuid.contains("71a27cdd-812a-11d0-bec7-08002be2092f")
+                || className.contains("diskdrive")
+                || className.contains("volume")
+                || className.contains("mass storage")
+                || className.contains("storage")
+                || className.contains("removable")
+                || className.contains("smartcard")
+                || className.contains("hid")
+                || className.contains("printer")
+                || className.contains("camera")
+                || className.contains("audio")
+                || className.contains("bluetooth")
+                || className.contains("portable")
+                || serviceName.contains("usb")
+                || serviceName.contains("smartcard")
+                || serviceName.contains("hid")
+                || serviceName.contains("printer")
+                || serviceName.contains("camera")
+                || serviceName.contains("bluetooth")
+                || infName.contains("usb")
+                || infName.contains("smartcard")
+                || infName.contains("hid")
+                || infName.contains("printer")
+                || infName.contains("camera")
+                || infName.contains("bluetooth")
+                || !"unknown".equals(deviceType);
+
+        return explicitUsbSignal || peripheralClassHint;
+    }
+
+    private String inferUsbDeviceType(String candidate,
+                                      String rawPayload,
+                                      String classGuid,
+                                      String className,
+                                      String serviceName,
+                                      String infName) {
+        if (candidate.contains("smartcard") || rawPayload.contains("smartcard") || serviceName.contains("smartcard") || infName.contains("smartcard")) {
+            return "smartcard_reader";
+        }
+        if (candidate.contains("printer") || rawPayload.contains("printer") || serviceName.contains("printer") || infName.contains("printer")) {
+            return "printer";
+        }
+        if (candidate.contains("camera") || rawPayload.contains("camera") || serviceName.contains("camera") || infName.contains("camera")) {
+            return "camera";
+        }
+        if (candidate.contains("hid") || rawPayload.contains("hid") || serviceName.contains("hid") || infName.contains("hid")) {
+            return "hid";
+        }
+        if (candidate.contains("audioendpoint") || rawPayload.contains("audioendpoint")) {
+            return "audio_device";
+        }
+        if (candidate.contains("bluetooth") || rawPayload.contains("bluetooth") || serviceName.contains("bluetooth") || infName.contains("bluetooth")) {
+            return "bluetooth_device";
+        }
+        if (candidate.contains("wpd") || rawPayload.contains("wpd")) {
+            return "portable_device";
+        }
+        if (isUsbMassStorageIdentity(candidate, rawPayload, rawPayload, classGuid, className, serviceName, infName)) {
+            return "mass_storage";
+        }
+        if (candidate.contains("usb") || rawPayload.contains("usb")) {
+            return "usb_device";
+        }
+        return "unknown";
+    }
+
+    private String buildUsbAssessmentReason(boolean storageLikely, boolean peripheralLikely, String deviceType) {
+        if (storageLikely) {
+            return "PnP signal and USB mass-storage signature matched";
+        }
+        if (peripheralLikely) {
+            return "PnP signal and USB/peripheral signature matched (" + deviceType + ")";
+        }
+        return "USB signal not strong enough";
+    }
+
+    private boolean isUsbCandidateLogEntry(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
+        String eventCode = safeValue(logEntry.getEventCode());
+        String message = safeValue(logEntry.getMessage()).toLowerCase(Locale.ROOT);
+        String rawPayload = safeValue(logEntry.getRawPayload()).toLowerCase(Locale.ROOT);
+        String provider = safeValue(parsedPayload.get("ProviderName")).toLowerCase(Locale.ROOT);
+        String channel = safeValue(parsedPayload.get("Channel")).toLowerCase(Locale.ROOT);
+        return "USB_STORAGE_CONNECTED".equalsIgnoreCase(eventCode)
+                || List.of("400", "410", "420", "430", "20001", "20003", "2100", "2101", "2102").contains(eventCode)
+                || message.contains("usb")
+                || rawPayload.contains("usb")
+                || rawPayload.contains("storage")
+                || rawPayload.contains("volume")
+                || rawPayload.contains("disk")
+                || provider.contains("kernel-pnp")
+                || channel.contains("kernel-pnp");
+    }
+
+    private <T> T firstNonNull(T preferred, T fallback) {
+        return preferred != null ? preferred : fallback;
+    }
+
+    private Map<String, Object> buildUsbAssessmentContext(UsbConnectionAssessment assessment) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("accepted", assessment.accepted());
+        context.put("storageLikely", assessment.storageLikely());
+        context.put("deviceType", assessment.deviceType());
+        context.put("deviceTypeLabel", usbDeviceTypeLabel(assessment.deviceType()));
+        context.put("reason", assessment.reason());
+        return context;
+    }
+
+    private String usbDeviceTypeLabel(String deviceType) {
+        return switch (safeValue(deviceType)) {
+            case "mass_storage" -> "USB mass storage";
+            case "smartcard_reader" -> "smartcard reader";
+            case "printer" -> "printer";
+            case "camera" -> "kamera";
+            case "hid" -> "HID zařízení";
+            case "audio_device" -> "audio zařízení";
+            case "bluetooth_device" -> "Bluetooth zařízení";
+            case "portable_device" -> "portable device";
+            case "usb_device" -> "USB zařízení";
+            default -> "USB zařízení";
+        };
+    }
+
     private String describeUsbDevice(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
         String value = firstNonBlank(
                 parsedPayload.get("DeviceName"),
@@ -628,7 +934,9 @@ public class DetectionService {
                                                     LocalDateTime occurredAt,
                                                     Map<String, Object> contextJson) {
         LocalDateTime effectiveTime = occurredAt == null ? LocalDateTime.now() : occurredAt;
-        DetectionFinding finding = findMergeCandidate(device, rule, effectiveTime).orElseGet(DetectionFinding::new);
+        Optional<DetectionFinding> mergeCandidate = findMergeCandidate(device, rule, effectiveTime);
+        boolean merged = mergeCandidate.isPresent();
+        DetectionFinding finding = mergeCandidate.orElseGet(DetectionFinding::new);
         LocalDateTime firstSeenAt = finding.getFirstSeenAt() == null || effectiveTime.isBefore(finding.getFirstSeenAt())
                 ? effectiveTime
                 : finding.getFirstSeenAt();
@@ -649,6 +957,15 @@ public class DetectionService {
         finding.setContextJson(buildAggregatedFindingContext(device, finding, finding.getContextJson(), contextJson, firstSeenAt, lastSeenAt));
         finding.setCreatedByAi(false);
         DetectionFinding savedFinding = detectionFindingRepository.save(finding);
+        log.info(
+                "Finding {}. deviceHostname={}, ruleCode={}, findingId={}, occurredAt={}, title={}",
+                merged ? "merged into existing record" : "created",
+                device.getHostname(),
+                rule.getCode(),
+                savedFinding.getId(),
+                effectiveTime,
+                title
+        );
         persistFindingEvent(savedFinding, contextJson);
         return savedFinding;
     }
@@ -659,11 +976,22 @@ public class DetectionService {
         return detectionFindingRepository.findTop10ByDeviceAndRuleOrderByLastSeenAtDesc(device, rule).stream()
                 .filter(candidate -> candidate.getStatus() != FindingStatusEnum.FALSE_POSITIVE)
                 .filter(candidate -> candidate.getStatus() != FindingStatusEnum.RESOLVED)
-                .filter(candidate -> isWithinMergeWindow(candidate, occurredAt))
+                .filter(candidate -> isWithinMergeWindow(candidate, occurredAt, mergeWindowForRule(rule)))
                 .findFirst();
     }
 
-    private boolean isWithinMergeWindow(DetectionFinding candidate, LocalDateTime occurredAt) {
+    private Duration mergeWindowForRule(DetectionRule rule) {
+        if (rule == null || rule.getCode() == null) {
+            return FINDING_CONTEXT_WINDOW;
+        }
+        if ("USB_DEVICE_CONNECTED".equalsIgnoreCase(rule.getCode())
+                || "USB_BLOCKED_CONNECTION_ATTEMPT".equalsIgnoreCase(rule.getCode())) {
+            return USB_FINDING_MERGE_WINDOW;
+        }
+        return FINDING_CONTEXT_WINDOW;
+    }
+
+    private boolean isWithinMergeWindow(DetectionFinding candidate, LocalDateTime occurredAt, Duration mergeWindow) {
         if (occurredAt == null) {
             return false;
         }
@@ -672,8 +1000,9 @@ public class DetectionService {
         if (candidateFrom == null || candidateTo == null) {
             return false;
         }
-        return !occurredAt.isBefore(candidateFrom.minus(FINDING_CONTEXT_WINDOW))
-                && !occurredAt.isAfter(candidateTo.plus(FINDING_CONTEXT_WINDOW));
+        Duration effectiveWindow = mergeWindow == null ? FINDING_CONTEXT_WINDOW : mergeWindow;
+        return !occurredAt.isBefore(candidateFrom.minus(effectiveWindow))
+                && !occurredAt.isAfter(candidateTo.plus(effectiveWindow));
     }
 
     private Map<String, Object> buildAggregatedFindingContext(EndpointDevice device,
@@ -754,6 +1083,13 @@ public class DetectionService {
 
         UUID sourceRecordId = parseUuid(trigger.get("sourceRecordId"));
         if (sourceRecordId != null && detectionFindingEventRepository.existsByFindingAndSourceRecordId(finding, sourceRecordId)) {
+            log.info(
+                    "Finding trigger event skipped as duplicate. findingId={}, sourceRecordId={}, eventCode={}, message={}",
+                    finding.getId(),
+                    sourceRecordId,
+                    asString(trigger.get("eventCode")),
+                    shorten(asString(trigger.get("message")), 180)
+            );
             return;
         }
 
@@ -770,6 +1106,13 @@ public class DetectionService {
         event.setActorUsername(asString(trigger.get("actorUsername")));
         event.setPayloadJson(new LinkedHashMap<>(trigger));
         detectionFindingEventRepository.save(event);
+        log.info(
+                "Finding trigger event persisted. findingId={}, sourceRecordId={}, eventCode={}, message={}",
+                finding.getId(),
+                sourceRecordId,
+                event.getEventCode(),
+                shorten(event.getMessage(), 180)
+        );
     }
 
     private DetectionFindingEventTypeEnum parseEventType(Object value) {
@@ -823,6 +1166,13 @@ public class DetectionService {
     private Map<String, Object> buildLogContext(EndpointDevice device,
                                                 DeviceLogEntry triggerEntry,
                                                 Map<String, String> parsedPayload) {
+        return buildLogContext(device, triggerEntry, parsedPayload, null);
+    }
+
+    private Map<String, Object> buildLogContext(EndpointDevice device,
+                                                DeviceLogEntry triggerEntry,
+                                                Map<String, String> parsedPayload,
+                                                UsbConnectionAssessment usbAssessment) {
         LocalDateTime center = triggerEntry.getOccurredAt() == null ? LocalDateTime.now() : triggerEntry.getOccurredAt();
         LocalDateTime from = center.minus(FINDING_CONTEXT_WINDOW);
         LocalDateTime to = center.plus(FINDING_CONTEXT_WINDOW);
@@ -856,6 +1206,9 @@ public class DetectionService {
         trigger.put("tokenElevationType", parsedPayload.get("TokenElevationType"));
         trigger.put("activityId", parsedPayload.get("ActivityId"));
         trigger.put("parsedPayload", parsedPayload);
+        if (usbAssessment != null) {
+            trigger.put("usbAssessment", buildUsbAssessmentContext(usbAssessment));
+        }
         context.put("trigger", trigger);
         Map<String, Object> timeWindow = new LinkedHashMap<>();
         timeWindow.put("from", from);
@@ -896,6 +1249,24 @@ public class DetectionService {
                     detailSuffix("uživatel " + user) +
                     detailSuffix("proces " + shorten(processName, 180));
         };
+    }
+
+    private boolean isPowerShellProcessCreationLog(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
+        if (logEntry == null) {
+            return false;
+        }
+        if (!"4688".equals(safeValue(logEntry.getEventCode()))) {
+            return false;
+        }
+        String processName = normalizePath(firstNonBlank(parsedPayload.get("NewProcessName"), parsedPayload.get("ProcessName")));
+        String message = safeValue(logEntry.getMessage()).toLowerCase(Locale.ROOT);
+        String rawPayload = safeValue(logEntry.getRawPayload()).toLowerCase(Locale.ROOT);
+        return processName.endsWith("\\powershell.exe")
+                || processName.endsWith("\\pwsh.exe")
+                || message.contains("powershell.exe")
+                || message.contains("pwsh.exe")
+                || rawPayload.contains("\\powershell.exe")
+                || rawPayload.contains("\\pwsh.exe");
     }
 
     private String deriveLogUserLabel(Map<String, String> parsedPayload) {
@@ -1065,6 +1436,12 @@ public class DetectionService {
         item.put("primary", networkInterface.isPrimary());
         item.put("up", networkInterface.isUp());
         return item;
+    }
+
+    private record UsbConnectionAssessment(boolean accepted,
+                                           boolean storageLikely,
+                                           String deviceType,
+                                           String reason) {
     }
 
     private Optional<DetectionRule> findEnabledRule(String code) {
@@ -1238,5 +1615,13 @@ public class DetectionService {
 
     private String safeValue(String value) {
         return value == null || value.isBlank() ? "-" : value.trim();
+    }
+
+    private record ElevatedPowerShellAssessment(boolean candidate,
+                                                boolean accepted,
+                                                String reason,
+                                                String processName,
+                                                String tokenElevationType,
+                                                String userLabel) {
     }
 }

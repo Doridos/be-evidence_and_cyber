@@ -134,18 +134,18 @@ public class BootstrapDataService implements CommandLineRunner {
         ensureDetectionRule(
                 "USB_DEVICE_CONNECTED",
                 "Připojení USB mass storage zařízení",
-                "Detekuje připojení nebo inicializaci USB mass storage zařízení podle systémových PnP událostí.",
+                "Detekuje připojení nebo inicializaci USB zařízení podle systémových PnP událostí a agent snapshotu, s preferencí zachytit i nejisté USB mass storage signály.",
                 SeverityLevelEnum.MEDIUM,
                 DetectionSourceTypeEnum.LOG,
-                Map.of("kind", "usb_system_event", "eventCodes", List.of("400", "410", "430", "20001", "20003", "2100", "2101", "2102"))
+                Map.of("kind", "usb_system_event", "eventCodes", List.of("400", "410", "420", "430", "20001", "20003", "2100", "2101", "2102", "USB_STORAGE_CONNECTED"))
         );
         ensureDetectionRule(
                 "USB_BLOCKED_CONNECTION_ATTEMPT",
                 "Pokus o připojení USB mass storage při blokaci",
-                "Detekuje pokus o připojení USB mass storage zařízení na stroji, kde jsou přenosná USB zařízení blokována politikou.",
+                "Detekuje pokus o připojení USB zařízení na stroji, kde jsou přenosná USB zařízení blokována politikou, včetně nejistých USB mass storage signálů.",
                 SeverityLevelEnum.HIGH,
                 DetectionSourceTypeEnum.LOG,
-                Map.of("kind", "usb_blocked_attempt", "eventCodes", List.of("400", "410", "430", "20001", "20003", "2100", "2101", "2102"))
+                Map.of("kind", "usb_blocked_attempt", "eventCodes", List.of("400", "410", "420", "430", "20001", "20003", "2100", "2101", "2102", "USB_STORAGE_CONNECTED"))
         );
         ensureDetectionRule(
                 "HOSTS_FILE_CHANGED",
