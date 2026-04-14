@@ -1,5 +1,7 @@
 package cz.fel.cvut.beevidence_and_cyber.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import cz.fel.cvut.beevidence_and_cyber.dao.AIAnalysisRun;
 import cz.fel.cvut.beevidence_and_cyber.dao.DetectionFinding;
 import cz.fel.cvut.beevidence_and_cyber.dao.DetectionFindingEvent;
@@ -46,6 +48,7 @@ import java.io.StringReader;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -64,6 +67,8 @@ public class DetectionService {
     private static final Duration FINDING_CONTEXT_WINDOW = Duration.ofMinutes(10);
     private static final Duration USB_FINDING_MERGE_WINDOW = Duration.ofMinutes(5);
     private static final int CONTEXT_ITEM_LIMIT = 500;
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper().findAndRegisterModules();
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final DetectionRuleRepository detectionRuleRepository;
     private final DetectionFindingRepository detectionFindingRepository;
@@ -413,52 +418,44 @@ public class DetectionService {
             }
             if ((usbConnectedRule != null || usbBlockedAttemptRule != null) && usbAssessment.accepted()) {
                 String usbDevice = describeUsbDevice(logEntry, parsedPayload);
-                DetectionRule matchedRule = device.isUsbRemovableBlocked()
-                        ? firstNonNull(usbBlockedAttemptRule, usbConnectedRule)
-                        : firstNonNull(usbConnectedRule, usbBlockedAttemptRule);
-                String matchedRuleCode = matchedRule == null ? "-" : matchedRule.getCode();
                 log.info(
-                        "USB connection event matched. deviceHostname={}, blocked={}, rule={}, eventCode={}, usbDevice={}, usbAssessment={}, message={}",
+                        "USB event matched. deviceHostname={}, blocked={}, storageLikely={}, deviceType={}, reason={}, eventCode={}, usbDevice={}",
                         device.getHostname(),
                         device.isUsbRemovableBlocked(),
-                        matchedRuleCode,
+                        usbAssessment.storageLikely(),
+                        usbAssessment.deviceType(),
+                        usbAssessment.reason(),
                         eventCode,
-                        usbDevice,
-                        buildUsbAssessmentContext(usbAssessment),
-                        shorten(safeValue(logEntry.getMessage()), 180)
+                        usbDevice
                 );
-                if (matchedRule == null) {
-                    log.warn(
-                            "USB candidate accepted but no detection rule is enabled. deviceHostname={}, eventCode={}, message={}",
-                            device.getHostname(),
-                            eventCode,
-                            shorten(safeValue(logEntry.getMessage()), 180)
-                    );
-                } else if (device.isUsbRemovableBlocked() && matchedRule == usbBlockedAttemptRule) {
-                    createOrRefreshFinding(
-                            device,
-                            matchedRule,
-                            "Pokus o připojení blokovaného USB zařízení",
-                            "Byl zaznamenán pokus o připojení USB zařízení na stanici s aktivní blokací USB: " + usbDevice +
-                                    detailSuffix(usbAssessment.storageLikely()
-                                            ? "předpoklad mass storage"
-                                            : "předpoklad " + usbDeviceTypeLabel(usbAssessment.deviceType())),
-                            logEntry.getOccurredAt(),
-                            buildLogContext(device, logEntry, parsedPayload, usbAssessment)
-                    );
-                } else if (matchedRule != null) {
-                    createOrRefreshFinding(
-                            device,
-                            matchedRule,
-                            "Připojeno USB zařízení",
-                            "Bylo zaznamenáno připojení USB zařízení: " + usbDevice +
-                                    detailSuffix(usbAssessment.storageLikely()
-                                            ? "předpoklad mass storage"
-                                            : "předpoklad " + usbDeviceTypeLabel(usbAssessment.deviceType())),
-                            logEntry.getOccurredAt(),
-                            buildLogContext(device, logEntry, parsedPayload, usbAssessment)
-                    );
+                if (device.isUsbRemovableBlocked()) {
+                    // USB is blocked on this device — any detected USB event is a blocked attempt
+                    DetectionRule blockedRule = firstNonNull(usbBlockedAttemptRule, usbConnectedRule);
+                    if (blockedRule != null) {
+                        createOrRefreshFinding(
+                                device,
+                                blockedRule,
+                                "Pokus o připojení blokovaného USB zařízení",
+                                "Byl zaznamenán pokus o připojení USB zařízení na stanici s aktivní blokací USB: " + usbDevice,
+                                logEntry.getOccurredAt(),
+                                buildLogContext(device, logEntry, parsedPayload, usbAssessment)
+                        );
+                    }
+                } else if (usbAssessment.storageLikely()) {
+                    // USB not blocked and confirmed mass storage — fire USB_DEVICE_CONNECTED
+                    if (usbConnectedRule != null) {
+                        createOrRefreshFinding(
+                                device,
+                                usbConnectedRule,
+                                "Připojeno USB mass storage zařízení",
+                                "Bylo zaznamenáno připojení USB mass storage zařízení: " + usbDevice,
+                                logEntry.getOccurredAt(),
+                                buildLogContext(device, logEntry, parsedPayload, usbAssessment)
+                        );
+                    }
                 }
+                // If not blocked and storageLikely=false (generic USB\VID_ from non-blocked device):
+                // skip — would be a false positive (keyboard, mouse, etc.)
             }
 
             ElevatedPowerShellAssessment powerShellAssessment = assessElevatedPowerShell(device, logEntry, parsedPayload);
@@ -580,287 +577,105 @@ public class DetectionService {
         return assessUsbConnectionEvent(logEntry, parsedPayload).accepted();
     }
 
+    /**
+     * Determines whether a log entry represents a USB mass storage connection event.
+     *
+     * <p>Three tiers, evaluated in order:
+     * <ol>
+     *   <li><b>USB_STORAGE_CONNECTED</b> — emitted by the agent's {@code UsbStorageCollector}
+     *       from the snapshot collector based on Get-Disk / Win32_DiskDrive / Get-PnpDevice.
+     *       Accepted according to the structured payload fields carried by the agent event.</li>
+     *   <li><b>Kernel-PnP event with USBSTOR\ prefix</b> — the USBSTOR driver was loaded,
+     *       meaning a mass storage device was successfully enumerated.
+     *       Accepted as confirmed mass storage.</li>
+     *   <li><b>Kernel-PnP event with USB\VID_ prefix</b> — a generic USB device was detected
+     *       by PnP but the USBSTOR driver was not loaded (e.g. blocked).
+     *       Accepted as a USB device (storageLikely=false) so that the calling code can
+     *       use it for the blocked-attempt path when {@code device.usbRemovableBlocked=true}.</li>
+     * </ol>
+     * Everything else is rejected to avoid false positives from unrelated log entries.
+     */
     private UsbConnectionAssessment assessUsbConnectionEvent(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
         String eventCode = safeValue(logEntry.getEventCode());
-        String logSource = logEntry.getLogSource() == null ? "" : safeValue(logEntry.getLogSource().name());
+
+        // Tier 1: clean agent signal from the snapshot collector
         if ("USB_STORAGE_CONNECTED".equalsIgnoreCase(eventCode)) {
-            log.info(
-                    "USB connection heuristic evaluated. eventCode={}, provider={}, channel={}, matched=true, pnpSignal=true, massStorageIdentity=true, peripheralIdentity=true, deviceType=mass_storage, classGuid=-, className=-, serviceName=-, infName=-, candidate={}, message={}",
-                    eventCode,
-                    "agent",
-                    "agent/snapshot",
-                    shorten(safeValue(logEntry.getMessage()), 160),
-                    shorten(safeValue(logEntry.getMessage()), 180)
+            boolean storageLikely = parseBoolean(parsedPayload.get("storageLikely"), true);
+            String deviceType = firstNonBlank(
+                    parsedPayload.get("deviceType"),
+                    storageLikely ? "mass_storage" : "usb_device"
             );
-            return new UsbConnectionAssessment(true, true, "mass_storage", "Agent USB storage snapshot detected");
-        }
-        String rawPayload = safeValue(logEntry.getRawPayload()).toLowerCase(Locale.ROOT);
-        String provider = safeValue(parsedPayload.get("ProviderName")).toLowerCase(Locale.ROOT);
-        String channel = safeValue(parsedPayload.get("Channel")).toLowerCase(Locale.ROOT);
-        String classGuid = safeValue(parsedPayload.get("ClassGuid")).toLowerCase(Locale.ROOT);
-        String className = safeValue(parsedPayload.get("ClassName")).toLowerCase(Locale.ROOT);
-        String serviceName = safeValue(parsedPayload.get("ServiceName")).toLowerCase(Locale.ROOT);
-        String infName = safeValue(parsedPayload.get("InfName")).toLowerCase(Locale.ROOT);
-        String candidate = firstNonBlank(
-                parsedPayload.get("DeviceInstanceId"),
-                parsedPayload.get("InstanceId"),
-                parsedPayload.get("DeviceId"),
-                parsedPayload.get("DeviceName"),
-                parsedPayload.get("FriendlyName"),
-                parsedPayload.get("DeviceDescription"),
-                parsedPayload.get("DriverName"),
-                logEntry.getMessage(),
-                rawPayload
-        ).toLowerCase(Locale.ROOT);
-        String storageHint = firstNonBlank(
-                parsedPayload.get("DriverName"),
-                serviceName,
-                infName,
-                parsedPayload.get("DeviceInstanceId"),
-                parsedPayload.get("InstanceId"),
-                parsedPayload.get("DeviceId"),
-                rawPayload
-        ).toLowerCase(Locale.ROOT);
-        boolean pnpSignal = "AGENT".equalsIgnoreCase(logSource)
-                || List.of("400", "410", "420", "430", "20001", "20003", "2100", "2101", "2102").contains(eventCode)
-                || provider.contains("kernel-pnp")
-                || provider.contains("driverframeworks")
-                || channel.contains("kernel-pnp")
-                || channel.contains("driverframeworks")
-                || parsedPayload.containsKey("DeviceInstanceId")
-                || parsedPayload.containsKey("DeviceId");
-        boolean usbCandidateSignal = candidate.contains("usb")
-                || candidate.contains("vid_")
-                || candidate.contains("pid_")
-                || candidate.contains("swd\\")
-                || candidate.contains("storage")
-                || candidate.contains("volume")
-                || candidate.contains("disk")
-                || candidate.contains("removable")
-                || rawPayload.contains("usb")
-                || rawPayload.contains("vid_")
-                || rawPayload.contains("pid_")
-                || rawPayload.contains("swd\\")
-                || rawPayload.contains("storage")
-                || rawPayload.contains("volume")
-                || rawPayload.contains("disk")
-                || rawPayload.contains("removable")
-                || rawPayload.contains("driveletters")
-                || rawPayload.contains("volumenames")
-                || rawPayload.contains("\"interfacetype\":\"usb\"")
-                || storageHint.contains("usb")
-                || storageHint.contains("storage")
-                || storageHint.contains("volume")
-                || storageHint.contains("disk")
-                || storageHint.contains("removable")
-                || classGuid.contains("53f56307-b6bf-11d0-94f2-00a0c91efb8b")
-                || classGuid.contains("4d36e967-e325-11ce-bfc1-08002be10318")
-                || classGuid.contains("71a27cdd-812a-11d0-bec7-08002be2092f");
-        boolean massStorageIdentity = isUsbMassStorageIdentity(candidate, rawPayload, storageHint, classGuid, className, serviceName, infName);
-        String deviceType = inferUsbDeviceType(candidate, rawPayload, classGuid, className, serviceName, infName);
-        boolean peripheralIdentity = isUsbPeripheralIdentity(candidate, rawPayload, storageHint, classGuid, className, serviceName, infName, deviceType);
-        boolean matched = pnpSignal && (usbCandidateSignal || massStorageIdentity || peripheralIdentity);
-        if (matched || pnpSignal || usbCandidateSignal || massStorageIdentity || peripheralIdentity) {
+            String reason = firstNonBlank(
+                    parsedPayload.get("reason"),
+                    parsedPayload.get("collector"),
+                    storageLikely ? "Agent USB storage event" : "Agent USB device event"
+            );
             log.info(
-                    "USB connection heuristic evaluated. eventCode={}, provider={}, channel={}, matched={}, pnpSignal={}, usbCandidateSignal={}, massStorageIdentity={}, peripheralIdentity={}, deviceType={}, classGuid={}, className={}, serviceName={}, infName={}, candidate={}, message={}",
-                    eventCode,
-                    provider,
-                    channel,
-                    matched,
-                    pnpSignal,
-                    usbCandidateSignal,
-                    massStorageIdentity,
-                    peripheralIdentity,
+                    "USB assessment: agent event received. storageLikely={}, deviceType={}, reason={}, detectionSources={}, stableId={}, message={}",
+                    storageLikely,
                     deviceType,
-                    classGuid,
-                    className,
-                    serviceName,
-                    infName,
-                    shorten(candidate, 160),
-                    shorten(safeValue(logEntry.getMessage()), 180)
+                    reason,
+                    safeValue(parsedPayload.get("detectionSources")),
+                    safeValue(parsedPayload.get("stableId")),
+                    shorten(safeValue(logEntry.getMessage()), 160)
             );
+            return new UsbConnectionAssessment(true, storageLikely, deviceType, reason);
         }
-        return new UsbConnectionAssessment(matched, massStorageIdentity, deviceType, buildUsbAssessmentReason(massStorageIdentity, usbCandidateSignal || peripheralIdentity, deviceType));
+
+        // Only evaluate known Kernel-PnP event codes
+        boolean isPnpCode = List.of("400", "410", "420", "430", "20001", "20003", "2100", "2101", "2102")
+                .contains(eventCode);
+        if (!isPnpCode) {
+            return new UsbConnectionAssessment(false, false, "unknown", "not a USB or PnP event");
+        }
+
+        // Extract DeviceInstanceId from the parsed XML payload
+        String deviceInstanceId = safeValue(firstNonBlank(
+                parsedPayload.get("DeviceInstanceId"),
+                parsedPayload.get("InstanceId"),
+                parsedPayload.get("DeviceId")
+        )).toLowerCase(Locale.ROOT);
+
+        // Tier 2: USBSTOR\ prefix — USBSTOR driver loaded → confirmed mass storage
+        if (deviceInstanceId.startsWith("usbstor\\") || deviceInstanceId.startsWith("uaspstor\\")) {
+            log.debug("USB assessment: USBSTOR device instance. eventCode={}, deviceInstanceId={}",
+                    eventCode, shorten(deviceInstanceId, 120));
+            return new UsbConnectionAssessment(true, true, "mass_storage", "USBSTOR device instance ID");
+        }
+
+        // Tier 3: USB\VID_ prefix — generic USB device (USBSTOR driver not loaded / blocked)
+        if (deviceInstanceId.startsWith("usb\\vid_")) {
+            log.debug("USB assessment: USB\\VID_ device instance. eventCode={}, deviceInstanceId={}",
+                    eventCode, shorten(deviceInstanceId, 120));
+            return new UsbConnectionAssessment(true, false, "usb_device", "USB VID device instance ID");
+        }
+
+        // Fallback: USBSTOR in raw payload (edge case — XML parsing may have failed)
+        String rawPayload = safeValue(logEntry.getRawPayload()).toLowerCase(Locale.ROOT);
+        if (rawPayload.contains("usbstor") || rawPayload.contains("uaspstor")) {
+            log.debug("USB assessment: USBSTOR in raw payload. eventCode={}", eventCode);
+            return new UsbConnectionAssessment(true, true, "mass_storage", "USBSTOR in event payload");
+        }
+
+        return new UsbConnectionAssessment(false, false, "unknown", "no USB storage signal");
     }
 
-    private boolean isUsbMassStorageIdentity(String candidate,
-                                             String rawPayload,
-                                             String storageHint,
-                                             String classGuid,
-                                             String className,
-                                             String serviceName,
-                                             String infName) {
-        boolean explicitStorageSignature = candidate.contains("usbstor\\")
-                || candidate.contains("usbstor")
-                || candidate.contains("uaspstor")
-                || candidate.contains("disk&ven_usb")
-                || candidate.contains("scsi\\disk&ven_usb")
-                || rawPayload.contains("usbstor")
-                || rawPayload.contains("uaspstor")
-                || rawPayload.contains("disk&ven_usb")
-                || rawPayload.contains("scsi\\disk&ven_usb")
-                || storageHint.contains("usbstor")
-                || storageHint.contains("uaspstor")
-                || storageHint.contains("usbstor.inf")
-                || storageHint.contains("uaspstor.inf");
-
-        boolean storageClassGuid = classGuid.contains("53f56307-b6bf-11d0-94f2-00a0c91efb8b")
-                || classGuid.contains("4d36e967-e325-11ce-bfc1-08002be10318")
-                || classGuid.contains("71a27cdd-812a-11d0-bec7-08002be2092f");
-
-        boolean storageClassName = className.contains("diskdrive")
-                || className.contains("volume")
-                || className.contains("mass storage")
-                || className.contains("storage")
-                || className.contains("removable");
-
-        boolean serviceSignature = serviceName.contains("usbstor")
-                || serviceName.contains("uaspstor")
-                || infName.contains("usbstor")
-                || infName.contains("uaspstor");
-
-        boolean nonStorageNoise = candidate.contains("audioendpoint")
-                || candidate.contains("printenum")
-                || candidate.contains("printer")
-                || candidate.contains("hidclass")
-                || candidate.contains("bluetooth")
-                || candidate.contains("bth")
-                || candidate.contains("camera")
-                || candidate.contains("image")
-                || candidate.contains("vide")
-                || candidate.contains("wpd")
-                || rawPayload.contains("audioendpoint")
-                || rawPayload.contains("printenum")
-                || rawPayload.contains("printer")
-                || rawPayload.contains("hidclass")
-                || rawPayload.contains("bluetooth")
-                || rawPayload.contains("camera")
-                || rawPayload.contains("wpd");
-
-        return !nonStorageNoise && (explicitStorageSignature || storageClassGuid || storageClassName || serviceSignature);
-    }
-
-    private boolean isUsbPeripheralIdentity(String candidate,
-                                            String rawPayload,
-                                            String storageHint,
-                                            String classGuid,
-                                            String className,
-                                            String serviceName,
-                                            String infName,
-                                            String deviceType) {
-        boolean explicitUsbSignal = candidate.contains("usb\\")
-                || candidate.contains("usb/")
-                || candidate.contains("usbst")
-                || candidate.contains("uaspstor")
-                || candidate.contains("usbstor")
-                || candidate.contains("disk&ven_usb")
-                || candidate.contains("scsi\\disk&ven_usb")
-                || rawPayload.contains("usb\\vid_")
-                || rawPayload.contains("usbst")
-                || rawPayload.contains("uaspstor")
-                || rawPayload.contains("usbstor")
-                || rawPayload.contains("disk&ven_usb")
-                || rawPayload.contains("scsi\\disk&ven_usb")
-                || rawPayload.contains("c_swdevice.inf")
-                || rawPayload.contains("swd\\scdeviceenum")
-                || storageHint.contains("usb")
-                || storageHint.contains("usbstor")
-                || storageHint.contains("uaspstor")
-                || storageHint.contains("c_swdevice.inf");
-
-        boolean peripheralClassHint = classGuid.contains("53f56307-b6bf-11d0-94f2-00a0c91efb8b")
-                || classGuid.contains("4d36e967-e325-11ce-bfc1-08002be10318")
-                || classGuid.contains("71a27cdd-812a-11d0-bec7-08002be2092f")
-                || className.contains("diskdrive")
-                || className.contains("volume")
-                || className.contains("mass storage")
-                || className.contains("storage")
-                || className.contains("removable")
-                || className.contains("smartcard")
-                || className.contains("hid")
-                || className.contains("printer")
-                || className.contains("camera")
-                || className.contains("audio")
-                || className.contains("bluetooth")
-                || className.contains("portable")
-                || serviceName.contains("usb")
-                || serviceName.contains("smartcard")
-                || serviceName.contains("hid")
-                || serviceName.contains("printer")
-                || serviceName.contains("camera")
-                || serviceName.contains("bluetooth")
-                || infName.contains("usb")
-                || infName.contains("smartcard")
-                || infName.contains("hid")
-                || infName.contains("printer")
-                || infName.contains("camera")
-                || infName.contains("bluetooth")
-                || !"unknown".equals(deviceType);
-
-        return explicitUsbSignal || peripheralClassHint;
-    }
-
-    private String inferUsbDeviceType(String candidate,
-                                      String rawPayload,
-                                      String classGuid,
-                                      String className,
-                                      String serviceName,
-                                      String infName) {
-        if (candidate.contains("smartcard") || rawPayload.contains("smartcard") || serviceName.contains("smartcard") || infName.contains("smartcard")) {
-            return "smartcard_reader";
-        }
-        if (candidate.contains("printer") || rawPayload.contains("printer") || serviceName.contains("printer") || infName.contains("printer")) {
-            return "printer";
-        }
-        if (candidate.contains("camera") || rawPayload.contains("camera") || serviceName.contains("camera") || infName.contains("camera")) {
-            return "camera";
-        }
-        if (candidate.contains("hid") || rawPayload.contains("hid") || serviceName.contains("hid") || infName.contains("hid")) {
-            return "hid";
-        }
-        if (candidate.contains("audioendpoint") || rawPayload.contains("audioendpoint")) {
-            return "audio_device";
-        }
-        if (candidate.contains("bluetooth") || rawPayload.contains("bluetooth") || serviceName.contains("bluetooth") || infName.contains("bluetooth")) {
-            return "bluetooth_device";
-        }
-        if (candidate.contains("wpd") || rawPayload.contains("wpd")) {
-            return "portable_device";
-        }
-        if (isUsbMassStorageIdentity(candidate, rawPayload, rawPayload, classGuid, className, serviceName, infName)) {
-            return "mass_storage";
-        }
-        if (candidate.contains("usb") || rawPayload.contains("usb")) {
-            return "usb_device";
-        }
-        return "unknown";
-    }
-
-    private String buildUsbAssessmentReason(boolean storageLikely, boolean peripheralLikely, String deviceType) {
-        if (storageLikely) {
-            return "PnP signal and USB mass-storage signature matched";
-        }
-        if (peripheralLikely) {
-            return "PnP signal and USB/peripheral signature matched (" + deviceType + ")";
-        }
-        return "USB signal not strong enough";
-    }
-
+    /** Returns true for log entries that warrant USB assessment logging (for debug purposes). */
     private boolean isUsbCandidateLogEntry(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
         String eventCode = safeValue(logEntry.getEventCode());
-        String message = safeValue(logEntry.getMessage()).toLowerCase(Locale.ROOT);
-        String rawPayload = safeValue(logEntry.getRawPayload()).toLowerCase(Locale.ROOT);
-        String provider = safeValue(parsedPayload.get("ProviderName")).toLowerCase(Locale.ROOT);
-        String channel = safeValue(parsedPayload.get("Channel")).toLowerCase(Locale.ROOT);
-        return "USB_STORAGE_CONNECTED".equalsIgnoreCase(eventCode)
-                || List.of("400", "410", "420", "430", "20001", "20003", "2100", "2101", "2102").contains(eventCode)
-                || message.contains("usb")
-                || rawPayload.contains("usb")
-                || rawPayload.contains("storage")
-                || rawPayload.contains("volume")
-                || rawPayload.contains("disk")
-                || provider.contains("kernel-pnp")
-                || channel.contains("kernel-pnp");
+        if ("USB_STORAGE_CONNECTED".equalsIgnoreCase(eventCode)) {
+            return true;
+        }
+        if (!List.of("400", "410", "420", "430", "20001", "20003", "2100", "2101", "2102").contains(eventCode)) {
+            return false;
+        }
+        String deviceInstanceId = safeValue(firstNonBlank(
+                parsedPayload.get("DeviceInstanceId"),
+                parsedPayload.get("InstanceId"),
+                parsedPayload.get("DeviceId")
+        )).toLowerCase(Locale.ROOT);
+        return deviceInstanceId.contains("usbstor") || deviceInstanceId.contains("uaspstor")
+                || deviceInstanceId.startsWith("usb\\vid_");
     }
 
     private <T> T firstNonNull(T preferred, T fallback) {
@@ -894,10 +709,15 @@ public class DetectionService {
 
     private String describeUsbDevice(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
         String value = firstNonBlank(
+                parsedPayload.get("friendlyName"),
+                parsedPayload.get("model"),
                 parsedPayload.get("DeviceName"),
                 parsedPayload.get("FriendlyName"),
                 parsedPayload.get("DeviceDescription"),
                 parsedPayload.get("DriverName"),
+                parsedPayload.get("pnpDeviceId"),
+                parsedPayload.get("instanceId"),
+                parsedPayload.get("stableId"),
                 parsedPayload.get("DeviceInstanceId"),
                 parsedPayload.get("InstanceId"),
                 parsedPayload.get("DeviceId")
@@ -1494,6 +1314,11 @@ public class DetectionService {
             return Map.of();
         }
 
+        String normalizedPayload = rawPayload.trim();
+        if (normalizedPayload.startsWith("{")) {
+            return parseJsonPayload(normalizedPayload);
+        }
+
         try {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
@@ -1529,6 +1354,56 @@ public class DetectionService {
         } catch (Exception exception) {
             return Map.of();
         }
+    }
+
+    private Map<String, String> parseJsonPayload(String rawPayload) {
+        try {
+            Map<String, Object> source = OBJECT_MAPPER.readValue(rawPayload, MAP_TYPE);
+            Map<String, String> flattened = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> entry : source.entrySet()) {
+                if (entry.getKey() == null || entry.getValue() == null) {
+                    continue;
+                }
+                Object value = entry.getValue();
+                if (value instanceof Collection<?> collection) {
+                    String joined = collection.stream()
+                            .filter(Objects::nonNull)
+                            .map(String::valueOf)
+                            .filter(item -> !item.isBlank())
+                            .collect(Collectors.joining("|"));
+                    if (!joined.isBlank()) {
+                        flattened.put(entry.getKey(), joined);
+                    }
+                    continue;
+                }
+                if (value instanceof Map<?, ?> nested) {
+                    flattened.put(entry.getKey(), safeValue(writeJson(nested)));
+                    continue;
+                }
+                String normalized = String.valueOf(value).trim();
+                if (!normalized.isBlank()) {
+                    flattened.put(entry.getKey(), normalized);
+                }
+            }
+            return Map.copyOf(flattened);
+        } catch (Exception exception) {
+            return Map.of();
+        }
+    }
+
+    private String writeJson(Object value) {
+        try {
+            return OBJECT_MAPPER.writeValueAsString(value);
+        } catch (Exception exception) {
+            return null;
+        }
+    }
+
+    private boolean parseBoolean(String value, boolean defaultValue) {
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+        return Boolean.parseBoolean(value.trim());
     }
 
     private void putIfPresent(Map<String, String> data, String key, String value) {
