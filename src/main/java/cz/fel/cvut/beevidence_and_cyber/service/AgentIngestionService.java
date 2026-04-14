@@ -151,11 +151,12 @@ public class AgentIngestionService {
         }
 
         log.info(
-                "Agent log ingestion persisted. deviceHostname={}, savedLogEntries={}, savedFileEvents={}, usbRelatedLogEntries={}",
+                "Agent log ingestion persisted. deviceHostname={}, savedLogEntries={}, savedFileEvents={}, usbRelatedLogEntries={}, elevatedPowerShellLogEntries={}",
                 device.getHostname(),
                 savedLogEntries.size(),
                 savedFileEvents.size(),
-                savedLogEntries.stream().filter(this::isUsbRelatedLogEntry).count()
+                savedLogEntries.stream().filter(this::isUsbRelatedLogEntry).count(),
+                savedLogEntries.stream().filter(this::isElevatedPowerShellRelatedLogEntry).count()
         );
         detectionService.evaluateCollectedSignals(device, savedLogEntries, savedFileEvents);
         pruneOldCollectedData(device);
@@ -177,6 +178,18 @@ public class AgentIngestionService {
                 || rawPayload.contains("usb")
                 || rawPayload.contains("usbstor")
                 || rawPayload.contains("uaspstor");
+    }
+
+    private boolean isElevatedPowerShellRelatedLogEntry(DeviceLogEntry entry) {
+        if (entry == null) {
+            return false;
+        }
+        String eventCode = entry.getEventCode() == null ? "" : entry.getEventCode().toUpperCase(Locale.ROOT);
+        String message = entry.getMessage() == null ? "" : entry.getMessage().toLowerCase(Locale.ROOT);
+        return "POWERSHELL_ELEVATED_LIVE".equals(eventCode)
+                || eventCode.equals("4688")
+                || message.contains("elevated powershell")
+                || message.contains("spuštění powershellu s elevovanými právy");
     }
 
     @Transactional

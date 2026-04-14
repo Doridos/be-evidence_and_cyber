@@ -325,7 +325,8 @@ public class DetectionService {
                 .filter(logEntry -> "4688".equals(safeValue(logEntry.getEventCode())))
                 .count();
         long powerShellProcessCandidates = logEntries.stream()
-                .filter(logEntry -> isPowerShellProcessCreationLog(logEntry, parseEventXml(logEntry.getRawPayload())))
+                .filter(logEntry -> "POWERSHELL_ELEVATED_LIVE".equalsIgnoreCase(safeValue(logEntry.getEventCode()))
+                        || isPowerShellProcessCreationLog(logEntry, parseEventXml(logEntry.getRawPayload())))
                 .count();
         log.info(
                 "Evaluating collected log signals. deviceHostname={}, logEntries={}, processCreateEvents={}, powerShellProcessCandidates={}, usbConnectedRuleEnabled={}, usbBlockedRuleEnabled={}, usbBlockedOnDevice={}",
@@ -525,6 +526,30 @@ public class DetectionService {
 
     private ElevatedPowerShellAssessment assessElevatedPowerShell(EndpointDevice device, DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
         String eventCode = safeValue(logEntry.getEventCode());
+        if ("POWERSHELL_ELEVATED_LIVE".equalsIgnoreCase(eventCode)) {
+            String processName = normalizePath(firstNonBlank(
+                    parsedPayload.get("processName"),
+                    parsedPayload.get("NewProcessName"),
+                    parsedPayload.get("ProcessName")
+            ));
+            String subjectUser = firstNonBlank(
+                    parsedPayload.get("user"),
+                    parsedPayload.get("subjectUser"),
+                    userLabel(parsedPayload, "SubjectDomainName", "SubjectUserName")
+            );
+            String tokenElevation = safeValue(parsedPayload.get("tokenElevationType"));
+            if (!isPowerShellExecutable(processName)) {
+                return new ElevatedPowerShellAssessment(true, false, "live event is not powershell", processName, tokenElevation, safeValue(subjectUser));
+            }
+            if ("-".equals(safeValue(subjectUser))) {
+                return new ElevatedPowerShellAssessment(true, false, "live event user missing", processName, tokenElevation, "-");
+            }
+            if (isBuiltinSecurityPrincipal(subjectUser)) {
+                return new ElevatedPowerShellAssessment(true, false, "builtin security principal", processName, tokenElevation, subjectUser);
+            }
+            return new ElevatedPowerShellAssessment(true, true, "agent live elevated powershell event", processName, tokenElevation, subjectUser);
+        }
+
         if (!"4688".equals(eventCode)) {
             return new ElevatedPowerShellAssessment(false, false, "not a process creation event", "-", "-", "-");
         }
@@ -550,7 +575,10 @@ public class DetectionService {
     }
 
     private boolean isPowerShellExecutable(String processName) {
-        return processName.endsWith("\\powershell.exe") || processName.endsWith("\\pwsh.exe");
+        return processName.endsWith("\\powershell.exe")
+                || processName.endsWith("\\pwsh.exe")
+                || "powershell.exe".equals(processName)
+                || "pwsh.exe".equals(processName);
     }
 
     private boolean isElevatedToken(String tokenElevation) {
@@ -1042,14 +1070,38 @@ public class DetectionService {
     private String buildPowerShellFindingDescription(DeviceLogEntry logEntry, Map<String, String> parsedPayload) {
         String eventCode = safeValue(logEntry.getEventCode());
         String user = deriveLogUserLabel(parsedPayload);
+        if ("POWERSHELL_ELEVATED_LIVE".equalsIgnoreCase(eventCode)) {
+            user = firstNonBlank(parsedPayload.get("user"), parsedPayload.get("subjectUser"), user);
+        }
         String processName = firstNonBlank(parsedPayload.get("NewProcessName"), parsedPayload.get("ProcessName"), parsedPayload.get("HostApplication"));
+        if ("POWERSHELL_ELEVATED_LIVE".equalsIgnoreCase(eventCode)) {
+            processName = firstNonBlank(parsedPayload.get("processName"), processName);
+        }
         String parentProcess = firstNonBlank(parsedPayload.get("CreatorProcessName"), parsedPayload.get("ParentProcessName"));
+        if ("POWERSHELL_ELEVATED_LIVE".equalsIgnoreCase(eventCode)) {
+            parentProcess = firstNonBlank(parsedPayload.get("parentProcessName"), parentProcess);
+        }
         String commandLine = firstNonBlank(parsedPayload.get("CommandLine"), parsedPayload.get("CommandInvocation"), parsedPayload.get("Payload"));
+        if ("POWERSHELL_ELEVATED_LIVE".equalsIgnoreCase(eventCode)) {
+            commandLine = firstNonBlank(parsedPayload.get("commandLine"), commandLine);
+        }
         String tokenElevation = safeValue(parsedPayload.get("TokenElevationType"));
+        if ("POWERSHELL_ELEVATED_LIVE".equalsIgnoreCase(eventCode)) {
+            tokenElevation = firstNonBlank(parsedPayload.get("tokenElevationType"), tokenElevation);
+        }
         String pid = firstNonBlank(parsedPayload.get("ProcessId"), parsedPayload.get("PID"), parsedPayload.get("ThreadId"));
+        if ("POWERSHELL_ELEVATED_LIVE".equalsIgnoreCase(eventCode)) {
+            pid = firstNonBlank(parsedPayload.get("processId"), pid);
+        }
         String activityId = safeValue(parsedPayload.get("ActivityId"));
 
         return switch (eventCode) {
+            case "POWERSHELL_ELEVATED_LIVE" -> "PowerShell spuštěn s elevovanými právy uživatelem " + user +
+                    detailSuffix("proces " + shorten(processName, 180)) +
+                    detailSuffix("pid " + pid) +
+                    detailSuffix("parent " + shorten(parentProcess, 140)) +
+                    detailSuffix("elevation " + tokenElevation) +
+                    detailSuffix("cmd " + shorten(commandLine, 220));
             case "4688" -> "PowerShell spuštěn uživatelem " + user +
                     detailSuffix("proces " + shorten(processName, 180)) +
                     detailSuffix("parent " + shorten(parentProcess, 140)) +
