@@ -8,5 +8,6 @@ import java.util.List;
 import java.util.UUID;
 
 public interface AIAnalysisRunRepository extends JpaRepository<AIAnalysisRun, UUID> {
+    List<AIAnalysisRun> findAllByOrderByStartedAtDesc();
     List<AIAnalysisRun> findByDeviceOrderByStartedAtDesc(EndpointDevice device);
 }

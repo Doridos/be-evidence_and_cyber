@@ -1,6 +1,7 @@
 package cz.fel.cvut.beevidence_and_cyber.controller;
 
 import cz.fel.cvut.beevidence_and_cyber.dto.*;
+import cz.fel.cvut.beevidence_and_cyber.service.AiAnalysisService;
 import cz.fel.cvut.beevidence_and_cyber.service.CurrentUserService;
 import cz.fel.cvut.beevidence_and_cyber.service.DetectionService;
 import jakarta.validation.Valid;
@@ -16,6 +17,7 @@ import java.util.UUID;
 public class DetectionController {
 
     private final DetectionService detectionService;
+    private final AiAnalysisService aiAnalysisService;
     private final CurrentUserService currentUserService;
 
     @GetMapping("/detection-rules")
@@ -57,12 +59,12 @@ public class DetectionController {
     @GetMapping("/ai-analysis-runs")
     @PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
     public List<?> getAllAiRuns() {
-        return detectionService.getAllAiRuns();
+        return aiAnalysisService.getAllAiRuns();
     }
 
     @PostMapping("/ai-analysis-runs")
     @PreAuthorize("hasRole('ADMIN')")
     public Object createAiRun(@Valid @RequestBody AIAnalysisRunRequest request) {
-        return detectionService.createAiRun(request, currentUserService.requireCurrentUser());
+        return aiAnalysisService.createAiRun(request, currentUserService.requireCurrentUser());
     }
 }

@@ -2,7 +2,6 @@ package cz.fel.cvut.beevidence_and_cyber.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import cz.fel.cvut.beevidence_and_cyber.dao.AIAnalysisRun;
 import cz.fel.cvut.beevidence_and_cyber.dao.DetectionFinding;
 import cz.fel.cvut.beevidence_and_cyber.dao.DetectionFindingEvent;
 import cz.fel.cvut.beevidence_and_cyber.dao.DetectionRule;
@@ -12,8 +11,6 @@ import cz.fel.cvut.beevidence_and_cyber.dao.EndpointDevice;
 import cz.fel.cvut.beevidence_and_cyber.dao.FileSystemEvent;
 import cz.fel.cvut.beevidence_and_cyber.dao.NetworkInterface;
 import cz.fel.cvut.beevidence_and_cyber.dao.User;
-import cz.fel.cvut.beevidence_and_cyber.dto.AIAnalysisRunDto;
-import cz.fel.cvut.beevidence_and_cyber.dto.AIAnalysisRunRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DetectionFindingDto;
 import cz.fel.cvut.beevidence_and_cyber.dto.DetectionFindingEventDto;
 import cz.fel.cvut.beevidence_and_cyber.dto.DetectionFindingStatusRequest;
@@ -26,7 +23,6 @@ import cz.fel.cvut.beevidence_and_cyber.enumeration.DetectionFindingEventTypeEnu
 import cz.fel.cvut.beevidence_and_cyber.enumeration.FindingStatusEnum;
 import cz.fel.cvut.beevidence_and_cyber.enumeration.SeverityLevelEnum;
 import cz.fel.cvut.beevidence_and_cyber.exception.NotFoundException;
-import cz.fel.cvut.beevidence_and_cyber.repository.AIAnalysisRunRepository;
 import cz.fel.cvut.beevidence_and_cyber.repository.DetectionFindingEventRepository;
 import cz.fel.cvut.beevidence_and_cyber.repository.DetectionFindingRepository;
 import cz.fel.cvut.beevidence_and_cyber.repository.DetectionRuleRepository;
@@ -45,7 +41,6 @@ import org.xml.sax.InputSource;
 
 import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.StringReader;
-import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Collection;
@@ -73,7 +68,6 @@ public class DetectionService {
     private final DetectionRuleRepository detectionRuleRepository;
     private final DetectionFindingRepository detectionFindingRepository;
     private final DetectionFindingEventRepository detectionFindingEventRepository;
-    private final AIAnalysisRunRepository aiAnalysisRunRepository;
     private final DeviceLogEntryRepository deviceLogEntryRepository;
     private final FileSystemEventRepository fileSystemEventRepository;
     private final DeviceSnapshotRepository deviceSnapshotRepository;
@@ -130,28 +124,6 @@ public class DetectionService {
         DetectionFinding saved = detectionFindingRepository.save(finding);
         auditService.log(actor, ActorSourceEnum.WEB, "UPDATE_FINDING_STATUS", "DETECTION_FINDING", saved.getId(), AuditResultEnum.SUCCESS,
                 Map.of("status", saved.getStatus().name()));
-        return apiMapper.toDto(saved);
-    }
-
-    public List<AIAnalysisRunDto> getAllAiRuns() {
-        return aiAnalysisRunRepository.findAll().stream().map(apiMapper::toDto).toList();
-    }
-
-    @Transactional
-    public AIAnalysisRunDto createAiRun(AIAnalysisRunRequest request, User actor) {
-        EndpointDevice device = deviceService.findDevice(request.deviceId());
-        AIAnalysisRun run = new AIAnalysisRun();
-        run.setDevice(device);
-        run.setTriggeredByUser(actor);
-        run.setModelName(request.modelName());
-        run.setPromptVersion(request.promptVersion());
-        run.setStartedAt(LocalDateTime.now());
-        run.setCompletedAt(LocalDateTime.now());
-        run.setResultSummary(request.resultSummary());
-        run.setRiskScore(BigDecimal.ZERO);
-        AIAnalysisRun saved = aiAnalysisRunRepository.save(run);
-        auditService.log(actor, ActorSourceEnum.WEB, "CREATE_AI_ANALYSIS_RUN", "AI_ANALYSIS_RUN", saved.getId(), AuditResultEnum.SUCCESS,
-                Map.of("deviceId", device.getId().toString()));
         return apiMapper.toDto(saved);
     }
 

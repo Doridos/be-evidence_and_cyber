@@ -31,6 +31,7 @@ public class SchemaAlignmentService implements CommandLineRunner {
         alignEndpointDeviceUsbRemovableBlockedColumn();
         alignEndpointDeviceOwnerColumns();
         alignDetectionFindingEventTable();
+        alignAiAnalysisRunReportJsonColumn();
         migrateLegacyDeviceOwners();
     }
 
@@ -129,6 +130,16 @@ public class SchemaAlignmentService implements CommandLineRunner {
             log.info("Database schema alignment applied: detection_finding_event table is available.");
         } catch (Exception exception) {
             log.warn("Database schema alignment for detection_finding_event could not be applied automatically: {}",
+                    exception.getMessage());
+        }
+    }
+
+    private void alignAiAnalysisRunReportJsonColumn() {
+        try {
+            jdbcTemplate.execute("alter table ai_analysis_run add column if not exists report_json jsonb");
+            log.info("Database schema alignment applied: ai_analysis_run.report_json is available.");
+        } catch (Exception exception) {
+            log.warn("Database schema alignment for ai_analysis_run.report_json could not be applied automatically: {}",
                     exception.getMessage());
         }
     }

@@ -1,10 +1,12 @@
 package cz.fel.cvut.beevidence_and_cyber.controller;
 
 import cz.fel.cvut.beevidence_and_cyber.dto.AgentDeploymentRequest;
+import cz.fel.cvut.beevidence_and_cyber.dto.AIChatRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceCreateRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceOwnerCreateRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceSubnetScanRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceUpdateRequest;
+import cz.fel.cvut.beevidence_and_cyber.service.AiAnalysisService;
 import cz.fel.cvut.beevidence_and_cyber.service.CommandService;
 import cz.fel.cvut.beevidence_and_cyber.service.CurrentUserService;
 import cz.fel.cvut.beevidence_and_cyber.service.DeviceService;
@@ -23,6 +25,7 @@ public class DeviceController {
 
     private final DeviceService deviceService;
     private final CommandService commandService;
+    private final AiAnalysisService aiAnalysisService;
     private final CurrentUserService currentUserService;
 
     @GetMapping
@@ -125,5 +128,11 @@ public class DeviceController {
     @PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
     public List<?> getCommandRequests(@PathVariable UUID id) {
         return commandService.getCommandRequestsForDevice(id);
+    }
+
+    @PostMapping("/{id}/ai-chat")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Object chatWithAi(@PathVariable UUID id, @Valid @RequestBody AIChatRequest request) {
+        return aiAnalysisService.chat(id, request, currentUserService.requireCurrentUser());
     }
 }

@@ -233,7 +233,8 @@ public class ApiMapper {
                 aiAnalysisRun.getStartedAt(),
                 aiAnalysisRun.getCompletedAt(),
                 aiAnalysisRun.getResultSummary(),
-                aiAnalysisRun.getRiskScore()
+                aiAnalysisRun.getRiskScore(),
+                aiAnalysisRun.getReportJson()
         );
     }
 
