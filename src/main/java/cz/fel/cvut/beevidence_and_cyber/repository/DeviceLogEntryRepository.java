@@ -12,4 +12,5 @@ public interface DeviceLogEntryRepository extends JpaRepository<DeviceLogEntry, 
     List<DeviceLogEntry> findByDeviceOrderByOccurredAtDesc(EndpointDevice device);
     List<DeviceLogEntry> findByDeviceAndOccurredAtBetweenOrderByOccurredAtAsc(EndpointDevice device, LocalDateTime from, LocalDateTime to);
     void deleteByDeviceAndOccurredAtBefore(EndpointDevice device, LocalDateTime occurredAt);
+    long deleteByOccurredAtBefore(LocalDateTime cutoff);
 }

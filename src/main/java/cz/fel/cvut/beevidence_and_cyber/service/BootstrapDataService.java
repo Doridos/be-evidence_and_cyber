@@ -44,7 +44,7 @@ public class BootstrapDataService implements CommandLineRunner {
                 "TASK_FILE_CHANGED",
                 "Změna naplánované úlohy",
                 "Detekuje vytvoření, úpravu nebo smazání souborů reprezentujících naplánované úlohy Windows.",
-                SeverityLevelEnum.HIGH,
+                SeverityLevelEnum.MEDIUM,
                 DetectionSourceTypeEnum.FILE,
                 Map.of(
                         "kind", "file_path_prefix",
@@ -71,7 +71,7 @@ public class BootstrapDataService implements CommandLineRunner {
                 "MONITORED_PATH_CHANGED",
                 "Změna v monitorované cestě",
                 "Detekuje libovolnou změnu souboru v monitorovaných citlivých systémových cestách.",
-                SeverityLevelEnum.MEDIUM,
+                SeverityLevelEnum.LOW,
                 DetectionSourceTypeEnum.FILE,
                 Map.of("kind", "generic_monitored_path_change")
         );
@@ -95,7 +95,7 @@ public class BootstrapDataService implements CommandLineRunner {
                 "OS_UPDATED",
                 "Aktualizace operačního systému",
                 "Detekuje změnu názvu, verze nebo buildu operačního systému mezi dvěma snapshoty zařízení.",
-                SeverityLevelEnum.HIGH,
+                SeverityLevelEnum.MEDIUM,
                 DetectionSourceTypeEnum.TELEMETRY,
                 Map.of("kind", "snapshot_os_changed")
         );
@@ -103,7 +103,7 @@ public class BootstrapDataService implements CommandLineRunner {
                 "ELEVATED_POWERSHELL_PROCESS",
                 "Spuštění PowerShellu s elevovanými právy",
                 "Detekuje spuštění powershell.exe nebo pwsh.exe se zvýšenými oprávněními.",
-                SeverityLevelEnum.HIGH,
+                SeverityLevelEnum.MEDIUM,
                 DetectionSourceTypeEnum.LOG,
                 Map.of("kind", "elevated_process", "processNames", List.of("powershell.exe", "pwsh.exe"))
         );
@@ -127,7 +127,7 @@ public class BootstrapDataService implements CommandLineRunner {
                 "SERVICE_INSTALLED",
                 "Instalace nové služby",
                 "Detekuje instalaci nebo registraci nové služby ve Windows přes Security i System logy.",
-                SeverityLevelEnum.HIGH,
+                SeverityLevelEnum.MEDIUM,
                 DetectionSourceTypeEnum.LOG,
                 Map.of("kind", "event_code", "eventCodes", List.of("4697", "7045"))
         );
@@ -151,7 +151,7 @@ public class BootstrapDataService implements CommandLineRunner {
                 "HOSTS_FILE_CHANGED",
                 "Změna souboru hosts",
                 "Detekuje změnu systémového souboru hosts.",
-                SeverityLevelEnum.HIGH,
+                SeverityLevelEnum.MEDIUM,
                 DetectionSourceTypeEnum.FILE,
                 Map.of("kind", "file_path_suffix", "pathSuffixes", List.of("\\windows\\system32\\drivers\\etc\\hosts"))
         );
@@ -159,7 +159,7 @@ public class BootstrapDataService implements CommandLineRunner {
                 "STARTUP_PERSISTENCE_CHANGED",
                 "Změna v Startup složce",
                 "Detekuje vytvoření nebo úpravu položek ve veřejné Startup složce.",
-                SeverityLevelEnum.HIGH,
+                SeverityLevelEnum.MEDIUM,
                 DetectionSourceTypeEnum.FILE,
                 Map.of("kind", "file_path_contains", "pathFragments", List.of("\\programdata\\microsoft\\windows\\start menu\\programs\\startup"))
         );

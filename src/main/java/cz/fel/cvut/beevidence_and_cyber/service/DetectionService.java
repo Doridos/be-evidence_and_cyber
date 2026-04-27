@@ -75,6 +75,7 @@ public class DetectionService {
     private final DeviceService deviceService;
     private final ApiMapper apiMapper;
     private final AuditService auditService;
+    private final EmailNotificationService emailNotificationService;
 
     public List<DetectionRuleDto> getAllRules() {
         return detectionRuleRepository.findAll().stream().map(apiMapper::toDto).toList();
@@ -778,15 +779,30 @@ public class DetectionService {
         finding.setCreatedByAi(false);
         DetectionFinding savedFinding = detectionFindingRepository.save(finding);
         log.info(
-                "Finding {}. deviceHostname={}, ruleCode={}, findingId={}, occurredAt={}, title={}",
+                "Finding {}. deviceHostname={}, ruleCode={}, findingId={}, severity={}, occurredAt={}, title={}",
                 merged ? "merged into existing record" : "created",
                 device.getHostname(),
                 rule.getCode(),
                 savedFinding.getId(),
+                savedFinding.getSeverity(),
                 effectiveTime,
                 title
         );
         persistFindingEvent(savedFinding, contextJson);
+
+        // Send email notification for newly created HIGH-severity findings only.
+        // Merged findings are deliberately excluded to avoid notification spam when
+        // the same event repeats within the merge window.
+        if (!merged && savedFinding.getSeverity() == SeverityLevelEnum.HIGH) {
+            log.info(
+                    "Triggering email notification for new HIGH finding. findingId={}, ruleCode={}, device={}",
+                    savedFinding.getId(),
+                    rule.getCode(),
+                    device.getHostname()
+            );
+            emailNotificationService.notifyNewHighFinding(savedFinding, device, title, description);
+        }
+
         return savedFinding;
     }
 

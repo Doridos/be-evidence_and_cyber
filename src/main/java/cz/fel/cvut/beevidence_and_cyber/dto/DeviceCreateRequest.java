@@ -6,6 +6,7 @@ import java.util.UUID;
 
 public record DeviceCreateRequest(
         String assetTag,
+        String inventoryNumber,
         @NotBlank String hostname,
         String fqdn,
         String primaryIp,

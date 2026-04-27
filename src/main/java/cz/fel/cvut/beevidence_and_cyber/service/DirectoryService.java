@@ -71,16 +71,32 @@ public class DirectoryService {
     }
 
     @Transactional
-    public User ensureUserExists(String username, String displayName) {
+    public User ensureUserExists(String username, String displayName, String email, String department) {
         return userRepository.findByAdUsernameIgnoreCase(username)
                 .map(existing -> {
-                    if (displayName != null && !displayName.isBlank()) {
+                    boolean changed = false;
+                    if (displayName != null && !displayName.isBlank()
+                            && !displayName.equals(existing.getDisplayName())) {
                         existing.setDisplayName(displayName);
+                        changed = true;
                     }
                     if (existing.getDisplayName() == null || existing.getDisplayName().isBlank()) {
                         existing.setDisplayName(username);
+                        changed = true;
                     }
-                    User savedUser = userRepository.save(existing);
+                    // Always sync email and department from AD — the user may have
+                    // updated them in AD since the last login.
+                    if (email != null && !email.isBlank()
+                            && !email.equalsIgnoreCase(existing.getEmail())) {
+                        existing.setEmail(email);
+                        changed = true;
+                    }
+                    if (department != null && !department.isBlank()
+                            && !department.equals(existing.getDepartment())) {
+                        existing.setDepartment(department);
+                        changed = true;
+                    }
+                    User savedUser = changed ? userRepository.save(existing) : existing;
                     ensureDefaultRoleAssigned(savedUser);
                     return savedUser;
                 })
@@ -88,6 +104,8 @@ public class DirectoryService {
                     User user = new User();
                     user.setAdUsername(username);
                     user.setDisplayName(displayName == null || displayName.isBlank() ? username : displayName);
+                    user.setEmail(email);
+                    user.setDepartment(department);
                     user.setEnabled(true);
                     user.setSource("AD");
                     User savedUser = userRepository.save(user);

@@ -13,6 +13,8 @@ public record AIChatRequest(
         @NotNull LocalDateTime from,
         @NotNull LocalDateTime to,
         @NotBlank String question,
-        List<@Valid AIChatMessageDto> history
+        List<@Valid AIChatMessageDto> history,
+        /** Optional Bearer token for AI endpoints that require authentication. */
+        String authToken
 ) {
 }

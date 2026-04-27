@@ -46,6 +46,7 @@ public class ApiMapper {
         return new DeviceDetailDto(
                 device.getId(),
                 device.getAssetTag(),
+                device.getInventoryNumber(),
                 device.getHostname(),
                 device.getFqdn(),
                 device.getPrimaryIp(),

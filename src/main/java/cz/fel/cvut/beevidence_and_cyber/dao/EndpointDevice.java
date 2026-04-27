@@ -26,6 +26,8 @@ public class EndpointDevice extends AbstractUuidEntity {
 
     private String assetTag;
 
+    private String inventoryNumber;
+
     @Column(nullable = false)
     private String hostname;
 

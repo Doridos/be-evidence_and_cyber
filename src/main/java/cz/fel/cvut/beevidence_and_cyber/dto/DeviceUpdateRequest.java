@@ -4,6 +4,7 @@ import java.util.UUID;
 
 public record DeviceUpdateRequest(
         String assetTag,
+        String inventoryNumber,
         String fqdn,
         String primaryIp,
         String site,

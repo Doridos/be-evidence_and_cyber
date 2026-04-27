@@ -10,4 +10,5 @@ public interface EndpointDeviceRepository extends JpaRepository<EndpointDevice, 
     Optional<EndpointDevice> findByHostnameIgnoreCase(String hostname);
     Optional<EndpointDevice> findByPrimaryIpIgnoreCase(String primaryIp);
     Optional<EndpointDevice> findByFqdnIgnoreCase(String fqdn);
+    Optional<EndpointDevice> findByInventoryNumberIgnoreCase(String inventoryNumber);
 }

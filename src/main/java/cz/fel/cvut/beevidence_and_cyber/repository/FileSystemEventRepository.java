@@ -12,4 +12,5 @@ public interface FileSystemEventRepository extends JpaRepository<FileSystemEvent
     List<FileSystemEvent> findByDeviceOrderByOccurredAtDesc(EndpointDevice device);
     List<FileSystemEvent> findByDeviceAndOccurredAtBetweenOrderByOccurredAtAsc(EndpointDevice device, LocalDateTime from, LocalDateTime to);
     void deleteByDeviceAndOccurredAtBefore(EndpointDevice device, LocalDateTime occurredAt);
+    long deleteByOccurredAtBefore(LocalDateTime cutoff);
 }

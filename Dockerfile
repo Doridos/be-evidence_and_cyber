@@ -37,6 +37,14 @@ ENV APP_AGENT_DEPLOYMENT_PYTHON_EXECUTABLE=python3 \
     APP_AGENT_DEPLOYMENT_PACKAGE_JAR_DIR=/opt/evidence/agent-package/target \
     APP_AGENT_DEPLOYMENT_PACKAGE_RUNTIME_DIR=/opt/evidence/agent-package/windows-runtime
 
+# Email notifications via Microsoft Graph (Office 365)
+# Přepište tyto hodnoty při spuštění kontejneru přes -e nebo docker-compose environment:
+ENV APP_NOTIFICATION_ENABLED=false \
+    APP_NOTIFICATION_CLIENT_ID="" \
+    APP_NOTIFICATION_CLIENT_SECRET="" \
+    APP_NOTIFICATION_TENANT_ID="" \
+    APP_NOTIFICATION_SENDER=""
+
 EXPOSE 8080
 
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]

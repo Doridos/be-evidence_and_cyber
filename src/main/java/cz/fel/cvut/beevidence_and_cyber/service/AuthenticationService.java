@@ -4,6 +4,7 @@ import cz.fel.cvut.beevidence_and_cyber.config.LdapProperties;
 import cz.fel.cvut.beevidence_and_cyber.dao.User;
 import cz.fel.cvut.beevidence_and_cyber.dto.AuthResponse;
 import cz.fel.cvut.beevidence_and_cyber.dto.LoginRequest;
+import cz.fel.cvut.beevidence_and_cyber.security.AdUserPrincipal;
 import cz.fel.cvut.beevidence_and_cyber.security.ApplicationUserPrincipal;
 import cz.fel.cvut.beevidence_and_cyber.security.JwtService;
 import lombok.RequiredArgsConstructor;
@@ -35,7 +36,21 @@ public class AuthenticationService {
 
         validateRequiredGroup(authentication);
         String username = authentication.getName();
-        User user = directoryService.ensureUserExists(username, username);
+
+        // Extract AD attributes populated by AdUserDetailsContextMapper during auth.
+        // Falls back to username if AD attributes are missing.
+        String displayName = username;
+        String email = null;
+        String department = null;
+        if (authentication.getPrincipal() instanceof AdUserPrincipal adPrincipal) {
+            if (adPrincipal.getDisplayName() != null && !adPrincipal.getDisplayName().isBlank()) {
+                displayName = adPrincipal.getDisplayName();
+            }
+            email = adPrincipal.getEmail();
+            department = adPrincipal.getDepartment();
+        }
+
+        User user = directoryService.ensureUserExists(username, displayName, email, department);
         directoryService.updateLastLogin(user);
         ApplicationUserPrincipal principal = directoryService.loadPrincipalByUsername(username);
 

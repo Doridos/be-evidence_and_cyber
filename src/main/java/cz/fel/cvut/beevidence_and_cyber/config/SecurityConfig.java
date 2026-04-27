@@ -1,5 +1,6 @@
 package cz.fel.cvut.beevidence_and_cyber.config;
 
+import cz.fel.cvut.beevidence_and_cyber.security.AdUserDetailsContextMapper;
 import cz.fel.cvut.beevidence_and_cyber.security.JwtAuthenticationFilter;
 import cz.fel.cvut.beevidence_and_cyber.security.AgentAccessFilter;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +33,7 @@ public class SecurityConfig {
 
     private final AgentAccessFilter agentAccessFilter;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final AdUserDetailsContextMapper adUserDetailsContextMapper;
     private final LdapProperties ldapProperties;
     private final CorsProperties corsProperties;
 
@@ -71,6 +73,9 @@ public class SecurityConfig {
         provider.setConvertSubErrorCodesToExceptions(true);
         provider.setUseAuthenticationRequestCredentials(true);
         provider.setSearchFilter(ldapProperties.getUserSearchFilter());
+        // Maps AD attributes (displayName, mail, department) into AdUserPrincipal
+        // during authentication so they are available without an extra LDAP query.
+        provider.setUserDetailsContextMapper(adUserDetailsContextMapper);
         return new ProviderManager(provider);
     }
 

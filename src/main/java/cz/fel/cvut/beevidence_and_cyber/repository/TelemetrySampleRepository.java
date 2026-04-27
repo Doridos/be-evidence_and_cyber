@@ -11,4 +11,5 @@ import java.util.UUID;
 public interface TelemetrySampleRepository extends JpaRepository<TelemetrySample, UUID> {
     List<TelemetrySample> findByDeviceOrderByCollectedAtDesc(EndpointDevice device);
     List<TelemetrySample> findByDeviceAndCollectedAtBetweenOrderByCollectedAtAsc(EndpointDevice device, LocalDateTime from, LocalDateTime to);
+    long deleteByCollectedAtBefore(LocalDateTime cutoff);
 }

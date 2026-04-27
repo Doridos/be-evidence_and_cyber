@@ -12,6 +12,8 @@ public record AIAnalysisRunRequest(
         @NotBlank String modelName,
         @NotNull LocalDateTime from,
         @NotNull LocalDateTime to,
-        String analystQuestion
+        String analystQuestion,
+        /** Optional Bearer token for AI endpoints that require authentication. */
+        String authToken
 ) {
 }

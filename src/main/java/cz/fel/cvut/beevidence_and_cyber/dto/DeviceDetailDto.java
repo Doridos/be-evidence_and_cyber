@@ -7,6 +7,7 @@ import java.util.UUID;
 public record DeviceDetailDto(
         UUID id,
         String assetTag,
+        String inventoryNumber,
         String hostname,
         String fqdn,
         String primaryIp,

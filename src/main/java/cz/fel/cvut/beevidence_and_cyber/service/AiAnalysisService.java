@@ -74,6 +74,13 @@ public class AiAnalysisService {
     private static final int FINDING_EVENT_LIMIT = 6;
     private static final int SNAPSHOT_LIMIT = 12;
     private static final int REMOTE_SESSION_LIMIT = 40;
+    /**
+     * Soft upper bound on the serialised context JSON in characters.
+     * At ~3.5 chars/token this keeps the payload under ~68 k tokens,
+     * leaving ~32 k tokens of headroom for the system prompt, analysis
+     * prompt template and the model's response within a 100 k token limit.
+     */
+    private static final int MAX_CONTEXT_CHARS = 240_000;
     private static final Duration AI_ENDPOINT_TIMEOUT = Duration.ofMinutes(5);
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
@@ -118,6 +125,7 @@ public class AiAnalysisService {
         Map<String, Object> report = callStructuredOllama(
                 request.endpointUrl(),
                 request.modelName(),
+                request.authToken(),
                 List.of(Map.of("role", "user", "content", prompt)),
                 ANALYSIS_SCHEMA
         );
@@ -160,7 +168,7 @@ public class AiAnalysisService {
         }
         messages.add(Map.of("role", "user", "content", request.question().trim()));
 
-        String answer = callTextOllama(request.endpointUrl(), request.modelName(), messages);
+        String answer = callTextOllama(request.endpointUrl(), request.modelName(), request.authToken(), messages);
         auditService.log(actor, ActorSourceEnum.WEB, "CHAT_WITH_DEVICE_AI", "DEVICE", device.getId(), AuditResultEnum.SUCCESS,
                 Map.of(
                         "modelName", request.modelName(),
@@ -248,6 +256,7 @@ public class AiAnalysisService {
                 "fileSystemEvents", buildTruncation(fileSystemEvents, fileSystemEventRepository.findByDeviceAndOccurredAtBetweenOrderByOccurredAtAsc(device, from, to).size(), FILE_EVENT_LIMIT),
                 "telemetry", buildTruncation(telemetrySamples, telemetrySampleRepository.findByDeviceAndCollectedAtBetweenOrderByCollectedAtAsc(device, from, to).size(), TELEMETRY_LIMIT)
         ));
+        trimContextToCharBudget(payload);
         return new DeviceAiContext(payload);
     }
 
@@ -303,6 +312,52 @@ public class AiAnalysisService {
                 "total", total,
                 "truncated", Math.max(total - limit, 0)
         );
+    }
+
+    /**
+     * Progressively trims the most verbose list-valued context keys (oldest
+     * items first, since all lists are already sorted ascending by time) until
+     * the serialised payload fits within {@link #MAX_CONTEXT_CHARS}.
+     * <p>
+     * The trimming order prioritises the noisiest data sources so that the most
+     * security-relevant structured data (findings, snapshots) is preserved as
+     * long as possible.
+     */
+    private void trimContextToCharBudget(Map<String, Object> payload) {
+        try {
+            String json = OBJECT_MAPPER.writeValueAsString(payload);
+            if (json.length() <= MAX_CONTEXT_CHARS) {
+                return;
+            }
+            // Keys in order of trim priority — noisiest / least critical first
+            String[] trimKeys = {"logs", "fileSystemEvents", "telemetry", "heartbeats", "remoteSessions", "commands", "snapshots", "findings"};
+            for (int pass = 0; pass < 30; pass++) {
+                // Pick the longest remaining list
+                String targetKey = null;
+                int targetSize = 0;
+                for (String key : trimKeys) {
+                    Object val = payload.get(key);
+                    if (val instanceof List<?> list && list.size() > targetSize) {
+                        targetSize = list.size();
+                        targetKey = key;
+                    }
+                }
+                if (targetKey == null || targetSize <= 1) {
+                    break; // nothing left to trim
+                }
+                // Reduce by 25 %, keeping the newest items (tail of the list)
+                List<?> list = (List<?>) payload.get(targetKey);
+                int newSize = Math.max(1, (int) Math.ceil(list.size() * 0.75));
+                payload.put(targetKey, list.subList(list.size() - newSize, list.size()));
+
+                json = OBJECT_MAPPER.writeValueAsString(payload);
+                if (json.length() <= MAX_CONTEXT_CHARS) {
+                    return;
+                }
+            }
+        } catch (IOException ignored) {
+            // Cannot estimate size — proceed with the original payload
+        }
     }
 
     private Map<String, Object> toLogContext(DeviceLogEntry entry) {
@@ -439,9 +494,10 @@ public class AiAnalysisService {
 
     private Map<String, Object> callStructuredOllama(String endpointUrl,
                                                      String modelName,
+                                                     String authToken,
                                                      List<Map<String, Object>> messages,
                                                      Map<String, Object> schema) {
-        String content = callOllama(endpointUrl, modelName, messages, schema);
+        String content = callOllama(endpointUrl, modelName, authToken, messages, schema);
         try {
             return OBJECT_MAPPER.readValue(content, MAP_TYPE);
         } catch (IOException exception) {
@@ -449,12 +505,13 @@ public class AiAnalysisService {
         }
     }
 
-    private String callTextOllama(String endpointUrl, String modelName, List<Map<String, Object>> messages) {
-        return callOllama(endpointUrl, modelName, messages, null);
+    private String callTextOllama(String endpointUrl, String modelName, String authToken, List<Map<String, Object>> messages) {
+        return callOllama(endpointUrl, modelName, authToken, messages, null);
     }
 
     private String callOllama(String endpointUrl,
                               String modelName,
+                              String authToken,
                               List<Map<String, Object>> userMessages,
                               Map<String, Object> formatSchema) {
         URI uri;
@@ -468,32 +525,70 @@ public class AiAnalysisService {
         messages.add(Map.of("role", "system", "content", AiAnalysisPrompts.SYSTEM_PROMPT));
         messages.addAll(userMessages);
 
+        boolean isOllamaLegacy = isOllamaLegacyEndpoint(uri);
+
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", modelName);
         body.put("messages", messages);
         body.put("stream", false);
-        body.put("options", Map.of("temperature", 0.2));
-        if (formatSchema != null) {
-            body.put("format", formatSchema);
+
+        if (isOllamaLegacy) {
+            // Ollama native /api/chat format
+            body.put("options", Map.of("temperature", 0.2));
+            if (formatSchema != null) {
+                body.put("format", formatSchema);
+            }
+        } else {
+            // OpenAI-compatible format (/v1/chat/completions and compatible APIs)
+            body.put("temperature", 0.2);
+            if (formatSchema != null) {
+                // Use structured outputs (json_schema) so the model is forced to
+                // respect exact field names and types — prevents the model from
+                // returning snake_case or renamed fields that break FE rendering.
+                body.put("response_format", Map.of(
+                        "type", "json_schema",
+                        "json_schema", Map.of(
+                                "name", "device_analysis",
+                                "strict", true,
+                                "schema", formatSchema
+                        )
+                ));
+            }
         }
 
         try {
-            HttpRequest request = HttpRequest.newBuilder(uri)
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(uri)
                     .timeout(AI_ENDPOINT_TIMEOUT)
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(OBJECT_MAPPER.writeValueAsString(body)))
-                    .build();
+                    .POST(HttpRequest.BodyPublishers.ofString(OBJECT_MAPPER.writeValueAsString(body)));
+
+            if (authToken != null && !authToken.isBlank()) {
+                requestBuilder.header("Authorization", "Bearer " + authToken.trim());
+            }
+
+            HttpRequest request = requestBuilder.build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 401) {
+                throw new BadRequestException("AI endpoint vyzaduje autentizaci (401 Unauthorized). Zkontrolujte Bearer token v nastaveni AI.");
+            }
             if (response.statusCode() >= 400) {
                 throw new BadRequestException("AI endpoint vratil chybu " + response.statusCode() + ": " + extractErrorBody(response.body()));
             }
 
             JsonNode root = OBJECT_MAPPER.readTree(response.body());
-            JsonNode contentNode = root.path("message").path("content");
+
+            // 1. OpenAI-compatible: choices[0].message.content
+            JsonNode contentNode = root.path("choices").path(0).path("message").path("content");
+            // 2. Ollama native /api/chat: message.content
+            if (contentNode.isMissingNode() || contentNode.isNull() || contentNode.asText().isBlank()) {
+                contentNode = root.path("message").path("content");
+            }
+            // 3. Ollama /api/generate fallback: response
             if (contentNode.isMissingNode() || contentNode.isNull() || contentNode.asText().isBlank()) {
                 contentNode = root.path("response");
             }
+
             String content = contentNode.asText("");
             if (content.isBlank()) {
                 throw new BadRequestException("AI endpoint vratil prazdnou odpoved.");
@@ -505,6 +600,17 @@ public class AiAnalysisService {
         } catch (IOException exception) {
             throw new BadRequestException(buildConnectivityErrorMessage(uri, exception));
         }
+    }
+
+    /**
+     * Returns true for Ollama's native /api/chat endpoint that uses a different
+     * request/response format than the OpenAI-compatible /v1/chat/completions.
+     */
+    private boolean isOllamaLegacyEndpoint(URI uri) {
+        if (uri == null || uri.getPath() == null) {
+            return false;
+        }
+        return uri.getPath().contains("/api/chat") || uri.getPath().contains("/api/generate");
     }
 
     private boolean isLoopbackHost(String host) {
@@ -552,17 +658,31 @@ public class AiAnalysisService {
                 Obdobi do: %s
                 Dodatecne zadani analytika: %s
 
-                Vystup:
-                - trafficLight nastav na GREEN, AMBER nebo RED,
-                - riskScore dej v rozsahu 0-100,
-                - headline ma byt jedna kratka veta,
-                - summary a overallAssessment pis cesky a konkretne,
-                - timeline obsahuje nejdulezitejsi udalosti v case,
-                - topRisks ma obsahovat jen skutecne relevantni rizika,
-                - recommendations serad podle priority NOW, SOON, LATER,
-                - followUpQuestions vypln jen pokud chybi dulezita data nebo je potreba dalsi kontrola.
+                Pozadovana struktura JSON vystupu (pouzij presne tato jmena poli — zadne snake_case, zadne alternativni nazvy):
+                {
+                  "trafficLight": "GREEN" | "AMBER" | "RED",
+                  "riskScore": <cislo 0–100>,
+                  "confidence": "LOW" | "MEDIUM" | "HIGH",
+                  "headline": "<jedna kratka veta>",
+                  "summary": "<cesky, konkretni shrnutí>",
+                  "overallAssessment": "<cesky, detailni hodnoceni>",
+                  "timeline": [
+                    { "time": "<HH:mm nebo kratky casovy udaj>", "title": "<nazev udalosti>", "severity": "INFO"|"LOW"|"MEDIUM"|"HIGH", "source": "<zdroj logu/dat>", "description": "<popis>", "reasoning": "<zduvodneni zavaznosti>" }
+                  ],
+                  "topRisks": [
+                    { "title": "<nazev rizika>", "severity": "LOW"|"MEDIUM"|"HIGH", "whyItMatters": "<proc je to dulezite>", "relatedRuleCodes": ["<kod pravidla>"] }
+                  ],
+                  "recommendations": [
+                    { "priority": "NOW"|"SOON"|"LATER", "action": "<konkretni krok>", "reason": "<zduvodneni>" }
+                  ],
+                  "followUpQuestions": ["<otazka>"]
+                }
 
-                Pokud jsou data klidna a bez zjevne anomalie, vrat GREEN a nevytvarej umele podezreni.
+                Dulezite:
+                - Dodrzuj presne nazvy poli vcetne velkeho/maleho pismene (camelCase).
+                - Pokud jsou data klidna a bez zjevne anomalie, vrat GREEN a nevytvarej umele podezreni.
+                - recommendations serad vzestupne podle priority: NOW, SOON, LATER.
+                - followUpQuestions vypln jen pokud chybi dulezita data nebo je potreba dalsi kontrola.
 
                 Kontext ve formatu JSON:
                 %s

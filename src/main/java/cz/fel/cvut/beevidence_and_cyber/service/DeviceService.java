@@ -92,6 +92,7 @@ public class DeviceService {
     public DeviceDetailDto createDevice(DeviceCreateRequest request, User actor) {
         EndpointDevice device = new EndpointDevice();
         device.setAssetTag(request.assetTag());
+        device.setInventoryNumber(request.inventoryNumber());
         device.setHostname(request.hostname());
         device.setFqdn(request.fqdn());
         device.setPrimaryIp(request.primaryIp());
@@ -112,6 +113,9 @@ public class DeviceService {
         EndpointDevice device = findDevice(id);
         if (request.assetTag() != null) {
             device.setAssetTag(request.assetTag());
+        }
+        if (request.inventoryNumber() != null) {
+            device.setInventoryNumber(request.inventoryNumber());
         }
         if (request.fqdn() != null) {
             device.setFqdn(request.fqdn());
