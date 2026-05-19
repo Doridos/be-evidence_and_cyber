@@ -45,7 +45,7 @@ mvn clean package
 
 Dockerfile backendu používá jako build context kořen tohoto repositáře, proto je potřeba spouštět příkazy z kořenové složky projektu.
 
-Vytvoření image a její nahrani do Docker Hubu:
+Vytvoření image a její nahrání do Docker Hubu:
 
 ```bash
 docker buildx build \
