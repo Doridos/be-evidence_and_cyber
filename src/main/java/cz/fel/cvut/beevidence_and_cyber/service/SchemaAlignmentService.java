@@ -2,16 +2,20 @@ package cz.fel.cvut.beevidence_and_cyber.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import cz.fel.cvut.beevidence_and_cyber.dao.DeviceDepartment;
 import cz.fel.cvut.beevidence_and_cyber.dao.DeviceOwner;
 import cz.fel.cvut.beevidence_and_cyber.dao.EndpointDevice;
+import cz.fel.cvut.beevidence_and_cyber.repository.DeviceDepartmentRepository;
 import cz.fel.cvut.beevidence_and_cyber.repository.DeviceOwnerRepository;
 import cz.fel.cvut.beevidence_and_cyber.repository.EndpointDeviceRepository;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.UUID;
 
 @Slf4j
 @Component
@@ -19,6 +23,7 @@ import java.util.Map;
 public class SchemaAlignmentService implements CommandLineRunner {
 
     private final JdbcTemplate jdbcTemplate;
+    private final DeviceDepartmentRepository deviceDepartmentRepository;
     private final DeviceOwnerRepository deviceOwnerRepository;
     private final EndpointDeviceRepository endpointDeviceRepository;
 
@@ -29,9 +34,12 @@ public class SchemaAlignmentService implements CommandLineRunner {
         alignCommandExecutionResultJsonColumn();
         alignCommandRequestCommandTypeConstraint();
         alignEndpointDeviceUsbRemovableBlockedColumn();
+        alignDeviceDepartmentTable();
+        alignEndpointDeviceDepartmentColumns();
         alignEndpointDeviceOwnerColumns();
         alignDetectionFindingEventTable();
         alignAiAnalysisRunReportJsonColumn();
+        migrateLegacyDeviceDepartments();
         migrateLegacyDeviceOwners();
     }
 
@@ -99,9 +107,36 @@ public class SchemaAlignmentService implements CommandLineRunner {
             jdbcTemplate.execute("alter table endpoint_device add column if not exists owner_id uuid");
             jdbcTemplate.execute("alter table endpoint_device add column if not exists owner_first_name varchar(255)");
             jdbcTemplate.execute("alter table endpoint_device add column if not exists owner_last_name varchar(255)");
+            jdbcTemplate.execute("alter table endpoint_device add column if not exists owner_department_name varchar(255)");
             log.info("Database schema alignment applied: endpoint_device owner columns are available.");
         } catch (Exception exception) {
             log.warn("Database schema alignment for endpoint_device owner columns could not be applied automatically: {}",
+                    exception.getMessage());
+        }
+    }
+
+    private void alignDeviceDepartmentTable() {
+        try {
+            jdbcTemplate.execute(
+                    "create table if not exists device_department (" +
+                            "id uuid not null primary key, " +
+                            "name varchar(255) not null unique" +
+                            ")"
+            );
+            log.info("Database schema alignment applied: device_department table is available.");
+        } catch (Exception exception) {
+            log.warn("Database schema alignment for device_department table could not be applied automatically: {}",
+                    exception.getMessage());
+        }
+    }
+
+    private void alignEndpointDeviceDepartmentColumns() {
+        try {
+            jdbcTemplate.execute("alter table endpoint_device add column if not exists department_id uuid");
+            jdbcTemplate.execute("alter table endpoint_device add column if not exists department_name varchar(255)");
+            log.info("Database schema alignment applied: endpoint_device department columns are available.");
+        } catch (Exception exception) {
+            log.warn("Database schema alignment for endpoint_device department columns could not be applied automatically: {}",
                     exception.getMessage());
         }
     }
@@ -144,11 +179,71 @@ public class SchemaAlignmentService implements CommandLineRunner {
         }
     }
 
+    private void migrateLegacyDeviceDepartments() {
+        try {
+            List<LegacyDepartmentAssignment> assignments = jdbcTemplate.query(
+                    "select d.id as device_id, " +
+                            "coalesce(nullif(trim(d.department_name), ''), nullif(trim(d.owner_department_name), ''), nullif(trim(o.department_name), '')) as department_name, " +
+                            "o.first_name as owner_first_name, " +
+                            "o.last_name as owner_last_name " +
+                            "from endpoint_device d " +
+                            "left join device_owner o on d.owner_id = o.id " +
+                            "where coalesce(nullif(trim(d.department_name), ''), nullif(trim(d.owner_department_name), ''), nullif(trim(o.department_name), '')) is not null",
+                    (resultSet, rowNum) -> new LegacyDepartmentAssignment(
+                            UUID.fromString(resultSet.getString("device_id")),
+                            resultSet.getString("department_name"),
+                            resultSet.getString("owner_first_name"),
+                            resultSet.getString("owner_last_name")
+                    )
+            );
+
+            boolean changed = false;
+            for (LegacyDepartmentAssignment assignment : assignments) {
+                EndpointDevice device = endpointDeviceRepository.findById(assignment.deviceId()).orElse(null);
+                if (device == null) {
+                    continue;
+                }
+
+                String departmentName = normalize(assignment.departmentName());
+                if (departmentName == null) {
+                    continue;
+                }
+
+                DeviceDepartment department = deviceDepartmentRepository.findByNameIgnoreCase(departmentName)
+                        .orElseGet(() -> {
+                            DeviceDepartment created = new DeviceDepartment();
+                            created.setName(departmentName);
+                            return deviceDepartmentRepository.save(created);
+                        });
+
+                device.setDepartment(department);
+                device.setDepartmentName(department.getName());
+                if (normalize(assignment.ownerFirstName()) == null && normalize(assignment.ownerLastName()) == null) {
+                    device.setOwner(null);
+                    device.setOwnerFirstName(null);
+                    device.setOwnerLastName(null);
+                }
+                endpointDeviceRepository.save(device);
+                changed = true;
+            }
+
+            if (changed) {
+                log.info("Database schema alignment applied: legacy department owners were migrated to device_department.");
+            }
+        } catch (Exception exception) {
+            log.warn("Database schema alignment for legacy departments could not be applied automatically: {}",
+                    exception.getMessage());
+        }
+    }
+
     private void migrateLegacyDeviceOwners() {
         try {
             Map<String, DeviceOwner> ownerIndex = new LinkedHashMap<>();
             for (DeviceOwner owner : deviceOwnerRepository.findAll()) {
-                ownerIndex.put((owner.getFirstName() + "|" + owner.getLastName()).toLowerCase(), owner);
+                String ownerKey = buildOwnerKey(owner.getFirstName(), owner.getLastName());
+                if (ownerKey != null) {
+                    ownerIndex.put(ownerKey, owner);
+                }
             }
 
             boolean changed = false;
@@ -192,5 +287,22 @@ public class SchemaAlignmentService implements CommandLineRunner {
         }
         String trimmed = value.trim();
         return trimmed.isBlank() ? null : trimmed;
+    }
+
+    private String buildOwnerKey(String firstName, String lastName) {
+        String normalizedFirstName = normalize(firstName);
+        String normalizedLastName = normalize(lastName);
+        if (normalizedFirstName == null || normalizedLastName == null) {
+            return null;
+        }
+        return (normalizedFirstName + "|" + normalizedLastName).toLowerCase();
+    }
+
+    private record LegacyDepartmentAssignment(
+            UUID deviceId,
+            String departmentName,
+            String ownerFirstName,
+            String ownerLastName
+    ) {
     }
 }

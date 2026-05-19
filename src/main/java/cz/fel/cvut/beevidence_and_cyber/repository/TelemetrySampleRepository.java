@@ -2,6 +2,8 @@ package cz.fel.cvut.beevidence_and_cyber.repository;
 
 import cz.fel.cvut.beevidence_and_cyber.dao.EndpointDevice;
 import cz.fel.cvut.beevidence_and_cyber.dao.TelemetrySample;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.time.LocalDateTime;
@@ -10,6 +12,7 @@ import java.util.UUID;
 
 public interface TelemetrySampleRepository extends JpaRepository<TelemetrySample, UUID> {
     List<TelemetrySample> findByDeviceOrderByCollectedAtDesc(EndpointDevice device);
+    Page<TelemetrySample> findByDevice(EndpointDevice device, Pageable pageable);
     List<TelemetrySample> findByDeviceAndCollectedAtBetweenOrderByCollectedAtAsc(EndpointDevice device, LocalDateTime from, LocalDateTime to);
     long deleteByCollectedAtBefore(LocalDateTime cutoff);
 }

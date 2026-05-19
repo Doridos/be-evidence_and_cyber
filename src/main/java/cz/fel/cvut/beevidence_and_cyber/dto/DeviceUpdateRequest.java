@@ -9,6 +9,7 @@ public record DeviceUpdateRequest(
         String primaryIp,
         String site,
         UUID ownerId,
+        UUID departmentId,
         Boolean agentInstalled
 ) {
 }

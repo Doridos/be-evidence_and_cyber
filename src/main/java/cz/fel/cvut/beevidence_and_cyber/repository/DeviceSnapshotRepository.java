@@ -2,6 +2,8 @@ package cz.fel.cvut.beevidence_and_cyber.repository;
 
 import cz.fel.cvut.beevidence_and_cyber.dao.DeviceSnapshot;
 import cz.fel.cvut.beevidence_and_cyber.dao.EndpointDevice;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.time.LocalDateTime;
@@ -11,6 +13,7 @@ import java.util.UUID;
 
 public interface DeviceSnapshotRepository extends JpaRepository<DeviceSnapshot, UUID> {
     List<DeviceSnapshot> findByDeviceOrderByCollectedAtDesc(EndpointDevice device);
+    Page<DeviceSnapshot> findByDevice(EndpointDevice device, Pageable pageable);
     Optional<DeviceSnapshot> findTopByDeviceOrderByVersionNoDesc(EndpointDevice device);
     List<DeviceSnapshot> findByCollectedAtBefore(LocalDateTime cutoff);
 }

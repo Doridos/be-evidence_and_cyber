@@ -12,6 +12,7 @@ public record DeviceCreateRequest(
         String primaryIp,
         String site,
         UUID ownerId,
+        UUID departmentId,
         boolean agentInstalled
 ) {
 }

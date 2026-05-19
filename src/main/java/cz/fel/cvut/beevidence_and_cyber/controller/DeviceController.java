@@ -3,6 +3,7 @@ package cz.fel.cvut.beevidence_and_cyber.controller;
 import cz.fel.cvut.beevidence_and_cyber.dto.AgentDeploymentRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.AIChatRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceCreateRequest;
+import cz.fel.cvut.beevidence_and_cyber.dto.DeviceDepartmentCreateRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceOwnerCreateRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceSubnetScanRequest;
 import cz.fel.cvut.beevidence_and_cyber.dto.DeviceUpdateRequest;
@@ -12,6 +13,7 @@ import cz.fel.cvut.beevidence_and_cyber.service.CurrentUserService;
 import cz.fel.cvut.beevidence_and_cyber.service.DeviceService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -40,10 +42,22 @@ public class DeviceController {
         return deviceService.getKnownOwners();
     }
 
+    @GetMapping("/departments")
+    @PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
+    public List<?> getKnownDepartments() {
+        return deviceService.getKnownDepartments();
+    }
+
     @PostMapping("/owners")
     @PreAuthorize("hasRole('ADMIN')")
     public Object createOwner(@Valid @RequestBody DeviceOwnerCreateRequest request) {
         return deviceService.createOwner(request, currentUserService.requireCurrentUser());
+    }
+
+    @PostMapping("/departments")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Object createDepartment(@Valid @RequestBody DeviceDepartmentCreateRequest request) {
+        return deviceService.createDepartment(request, currentUserService.requireCurrentUser());
     }
 
     @GetMapping("/{id}")
@@ -96,32 +110,42 @@ public class DeviceController {
 
     @GetMapping("/{id}/snapshots")
     @PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
-    public List<?> getSnapshots(@PathVariable UUID id) {
-        return deviceService.getSnapshots(id);
+    public Page<?> getSnapshots(@PathVariable UUID id,
+                                @RequestParam(defaultValue = "0") int page,
+                                @RequestParam(defaultValue = "10") int size) {
+        return deviceService.getSnapshotsPaged(id, page, Math.min(size, 100));
     }
 
     @GetMapping("/{id}/heartbeats")
     @PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
-    public List<?> getHeartbeats(@PathVariable UUID id) {
-        return deviceService.getHeartbeats(id);
+    public Page<?> getHeartbeats(@PathVariable UUID id,
+                                 @RequestParam(defaultValue = "0") int page,
+                                 @RequestParam(defaultValue = "15") int size) {
+        return deviceService.getHeartbeatsPaged(id, page, Math.min(size, 100));
     }
 
     @GetMapping("/{id}/telemetry")
     @PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
-    public List<?> getTelemetry(@PathVariable UUID id) {
-        return deviceService.getTelemetry(id);
+    public Page<?> getTelemetry(@PathVariable UUID id,
+                                @RequestParam(defaultValue = "0") int page,
+                                @RequestParam(defaultValue = "15") int size) {
+        return deviceService.getTelemetryPaged(id, page, Math.min(size, 100));
     }
 
     @GetMapping("/{id}/logs")
     @PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
-    public List<?> getLogs(@PathVariable UUID id) {
-        return deviceService.getLogs(id);
+    public Page<?> getLogs(@PathVariable UUID id,
+                           @RequestParam(defaultValue = "0") int page,
+                           @RequestParam(defaultValue = "15") int size) {
+        return deviceService.getLogsPaged(id, page, Math.min(size, 100));
     }
 
     @GetMapping("/{id}/file-system-events")
     @PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
-    public List<?> getFileSystemEvents(@PathVariable UUID id) {
-        return deviceService.getFileSystemEvents(id);
+    public Page<?> getFileSystemEvents(@PathVariable UUID id,
+                                       @RequestParam(defaultValue = "0") int page,
+                                       @RequestParam(defaultValue = "15") int size) {
+        return deviceService.getFileSystemEventsPaged(id, page, Math.min(size, 100));
     }
 
     @GetMapping("/{id}/command-requests")

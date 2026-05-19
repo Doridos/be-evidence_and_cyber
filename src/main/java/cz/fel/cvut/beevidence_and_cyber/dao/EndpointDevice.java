@@ -41,9 +41,15 @@ public class EndpointDevice extends AbstractUuidEntity {
 
     private String ownerLastName;
 
+    private String departmentName;
+
     @ManyToOne
     @JoinColumn(name = "owner_id")
     private DeviceOwner owner;
+
+    @ManyToOne
+    @JoinColumn(name = "department_id")
+    private DeviceDepartment department;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

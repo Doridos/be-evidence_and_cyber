@@ -35,12 +35,14 @@ public class ApiMapper {
 
     public DeviceDetailDto toDto(EndpointDevice device,
                                  String effectiveStatus,
+                                 String currentLoggedUser,
                                  List<DeviceSnapshotDto> snapshots,
                                  List<AgentHeartbeatDto> heartbeats,
                                  List<TelemetrySampleDto> telemetrySamples,
                                  List<DeviceLogEntryDto> logEntries,
                                  List<FileSystemEventDto> fileSystemEvents) {
         DeviceOwner owner = device.getOwner();
+        DeviceDepartment department = device.getDepartment();
         String ownerFirstName = owner == null ? device.getOwnerFirstName() : owner.getFirstName();
         String ownerLastName = owner == null ? device.getOwnerLastName() : owner.getLastName();
         return new DeviceDetailDto(
@@ -54,9 +56,12 @@ public class ApiMapper {
                 owner == null ? null : owner.getId(),
                 ownerFirstName,
                 ownerLastName,
+                department == null ? null : department.getId(),
+                department == null ? device.getDepartmentName() : department.getName(),
                 effectiveStatus,
                 device.isAgentInstalled(),
                 device.isUsbRemovableBlocked(),
+                currentLoggedUser,
                 device.getDiscoveredAt(),
                 device.getArchivedAt(),
                 snapshots,

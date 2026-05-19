@@ -45,11 +45,11 @@ mvn clean package
 
 Dockerfile backendu používá jako build context kořen tohoto repositáře, proto je potřeba spouštět příkazy z kořenové složky projektu.
 
-Vytvoření multi-arch image a její nahrani do Docker Hubu:
+Vytvoření image a její nahrani do Docker Hubu:
 
 ```bash
 docker buildx build \
-  --platform linux/amd64,linux/arm64 \
+  --platform linux/amd64 \
   -f be-evidence_and_cyber/Dockerfile \
   -t <docker-hub-username>/<backend-image-name>:<tag-name> \
   --push \
